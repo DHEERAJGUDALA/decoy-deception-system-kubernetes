@@ -809,3 +809,311 @@ kubectl logs -l app=sentinel | grep rate_limit_exceeded
 - Alert aggregation and batching
 
 ---
+## Phase 5: AppGraph Controller (CRD-Based Orchestration)
+**Status**: ✓ Completed
+**Date**: 2026-02-04
+
+### Summary
+Implemented a Kubernetes operator using controller-runtime that manages decoy orchestration via Custom Resource Definitions (AppGraph CRD). The Controller automatically creates 3 decoy pods (exact, slow, logger types) with NetworkPolicy isolation and auto-cleanup after 15 minutes. Includes a real-time web dashboard with D3.js force-directed graph visualization and WebSocket updates on NodePort 30090.
+
+### Files Created
+
+#### services/controller/
+- `go.mod` - Go module with controller-runtime v0.16.0 and gorilla/websocket v1.5.0
+- `go.sum` - Dependency checksums (auto-generated)
+- `cmd/main.go` - Controller implementation (650+ lines)
+- `Dockerfile` - Multi-stage Alpine build (CGO disabled)
+- `USAGE.md` - Dashboard access and AppGraph CR examples
+
+#### deploy/k8s/
+- `appgraph-crd.yaml` - Custom Resource Definition
+- `controller-rbac.yaml` - ServiceAccount, ClusterRole, ClusterRoleBinding
+- `controller.yaml` - Deployment + Service (NodePort 30090)
+
+### Resource Allocation
+
+**Controller**: 100Mi RAM / 100m CPU
+**Decoys (3)**: 120Mi RAM / 60m CPU
+
+---
+
+## Phase 6: Reporter Service (Metrics Collection)
+**Status**: ✓ Completed
+**Date**: 2026-02-04
+
+### Summary
+Implemented a lightweight push-based metrics collection service with rolling 30-minute history and automated cleanup. Reporter aggregates metrics from all decoy and legitimate services via a simple POST /api/ingest endpoint. Includes a client helper library for fire-and-forget async metric sending. Resource-efficient design with 5.7MB binary and 60Mi memory limit.
+
+### Files Created
+
+#### services/reporter/
+- `go.mod` - Go module definition (Go 1.21, no external dependencies)
+- `cmd/main.go` - Reporter service implementation (342 lines)
+  - POST /api/ingest for metric ingestion
+  - GET /api/stats for aggregated statistics
+  - GET /api/services for per-service breakdown
+  - GET /health for health check
+  - Rolling 30-minute metric history
+  - Automated cleanup worker (5-minute interval)
+- `client/client.go` - Lightweight client helper library
+  - NewClient(url) constructor
+  - Send(metric) - Fire-and-forget async
+  - SendSync(metric) - Blocking send with error
+- `client/go.mod` - Client module definition
+- `Dockerfile` - Multi-stage Alpine build (5.7MB binary, ~10-12MB image)
+
+#### deploy/k8s/
+- `reporter.yaml` - Deployment + Service
+  - ClusterIP service (internal only)
+  - Resource limits: 60Mi RAM / 40m CPU
+  - Environment variables: PORT, HISTORY_DURATION, CLEANUP_INTERVAL
+
+### Core Functionality
+
+**Metric Ingestion**:
+- Endpoint: `POST /api/ingest`
+- Thread-safe in-memory storage
+- Automatic timestamp addition
+- JSON structured metrics
+
+**Metric Structure**:
+```go
+type Metric struct {
+    Timestamp  string
+    Service    string
+    Method     string
+    Path       string
+    SourceIP   string
+    StatusCode int
+    Latency    int64
+    Custom     map[string]interface{}
+}
+```
+
+**Aggregated Statistics** (GET /api/stats):
+- Total requests
+- Requests by service/IP/path
+- Average latency
+- Status code distribution
+- Unique IP count
+- Time range coverage
+
+**Per-Service Breakdown** (GET /api/services):
+- Total requests per service
+- Unique IPs per service
+- Path distribution per service
+- Average latency per service
+
+**Rolling History**:
+- Default: 30-minute retention window (configurable)
+- Automatic cleanup every 5 minutes (configurable)
+- Background cleanup worker goroutine
+- Removes metrics older than retention window
+
+**Thread Safety**:
+- sync.RWMutex for concurrent access
+- Read locks for queries
+- Write locks for ingestion/cleanup
+
+### Client Helper Library
+
+**Usage Example**:
+```go
+import "github.com/decoy-deception-system/reporter/client"
+
+client := client.NewClient("http://reporter:8080/api/ingest")
+
+// Fire-and-forget (async)
+client.Send(client.Metric{
+    Service:    "frontend-api",
+    Method:     "GET",
+    Path:       "/api/products",
+    SourceIP:   "192.168.1.100",
+    StatusCode: 200,
+    Latency:    45,
+})
+
+// Blocking with error handling
+err := client.SendSync(metric)
+```
+
+**Client Features**:
+- Minimal dependencies (stdlib only)
+- 2-second timeout for reliability
+- Async Send() for non-blocking
+- Sync SendSync() for error handling
+- Automatic timestamp generation
+
+### Configuration
+
+**Environment Variables**:
+- `PORT` - HTTP server port (default: 8080)
+- `HISTORY_DURATION` - Metric retention (default: 30m)
+- `CLEANUP_INTERVAL` - Cleanup frequency (default: 5m)
+
+### Docker Build
+
+**Binary Size**: 5.7MB (stripped)
+**Image Size**: ~10-12MB (Alpine + binary + ca-certificates)
+
+**Build Commands**:
+```bash
+cd services/reporter
+docker build -t reporter:latest .
+
+# For k3s
+sudo nerdctl -n k8s.io build -t reporter:latest .
+```
+
+### Kubernetes Deployment
+
+```bash
+kubectl apply -f deploy/k8s/reporter.yaml
+kubectl get pods -l app=reporter
+kubectl get svc reporter
+```
+
+### Resource Allocation
+
+**Reporter Service**:
+- Memory: 60Mi (request = limit)
+- CPU: 40m (request = limit)
+- QoS: Guaranteed
+
+**Updated System Total**:
+| Component | Memory | CPU | Phase |
+|-----------|--------|-----|-------|
+| k3s | ~800Mi | N/A | 1 |
+| frontend-api | 80Mi | 50m | 2 |
+| payment-svc | 40Mi | 30m | 2 |
+| manager | 60Mi | 50m | 3 |
+| sentinel | 80Mi | 50m | 4 |
+| controller | 100Mi | 100m | 5 |
+| reporter | 60Mi | 40m | 6 |
+| decoys (3) | 120Mi | 60m | 5 |
+| **TOTAL** | **~1.34GB** | **380m** | **Within 2.5GB budget ✓** |
+
+### Performance Characteristics
+
+**Memory Usage**:
+- ~200 bytes per metric (estimated)
+- 30min @ 10 req/sec = 18,000 metrics = ~3.6MB
+- Well within 60Mi memory limit
+
+**Latency**:
+- Ingestion: <1ms (in-memory append)
+- Stats aggregation: O(n) linear scan
+- Service breakdown: O(n) linear scan
+- Cleanup: O(n) linear scan
+
+**Concurrency**:
+- Unlimited concurrent ingestion
+- Unlimited concurrent queries (RWMutex multiple readers)
+- Single cleanup worker
+
+### API Examples
+
+**Ingest Metric**:
+```bash
+curl -X POST http://reporter:8080/api/ingest \
+  -H "Content-Type: application/json" \
+  -d '{
+    "service": "frontend-api",
+    "method": "GET",
+    "path": "/api/products",
+    "source_ip": "192.168.1.100",
+    "status_code": 200,
+    "latency_ms": 45
+  }'
+```
+
+**Get Stats**:
+```bash
+curl http://reporter:8080/api/stats
+```
+
+**Get Service Breakdown**:
+```bash
+curl http://reporter:8080/api/services
+```
+
+**Health Check**:
+```bash
+curl http://reporter:8080/health
+```
+
+### Integration with Other Services
+
+**Frontend-API Integration**:
+```go
+go func() {
+    defer func() { recover() }()
+    client := reporter.NewClient("http://reporter:8080/api/ingest")
+    client.Send(reporter.Metric{
+        Service:    "frontend-api",
+        Method:     r.Method,
+        Path:       r.URL.Path,
+        SourceIP:   sourceIP,
+        StatusCode: 200,
+        Latency:    latency,
+    })
+}()
+```
+
+**Decoy Integration**:
+- Same client usage as frontend-api
+- Service name: "decoy-frontend-1", "decoy-frontend-2", "decoy-frontend-3"
+- REPORTER_URL env var: "http://reporter:8080/api/ingest"
+
+### Monitoring and Observability
+
+**Reporter Logs**:
+- Metric ingestion: `[INGEST] frontend-api from 192.168.1.100 - GET /api/products (status: 200, latency: 45ms)`
+- Cleanup: `[CLEANUP] Removed 50 old metrics, retained 100`
+- Startup: `[CONFIG] Port: 8080`, `[CONFIG] History Duration: 30m0s`
+
+**Health Endpoint Metrics**:
+- Current metric count
+- History duration setting
+- Service status
+
+### Limitations and Considerations
+
+**In-Memory Storage**:
+- No persistence (metrics lost on restart)
+- Limited by memory allocation (60Mi)
+- Suitable for short-term rolling window
+
+**Cleanup Precision**:
+- Cleanup runs every 5 minutes (not continuous)
+- Metrics may exceed 30min window by up to 5min
+
+**No Authentication**:
+- Ingestion endpoint open to all pods
+- Suitable for cluster-internal use only
+
+**No Rate Limiting**:
+- Unlimited ingestion rate
+- Recommend rate limiting at client side
+
+### Production Readiness
+
+**Implemented**:
+- ✓ Thread-safe concurrent access
+- ✓ Automated cleanup worker
+- ✓ Configurable retention window
+- ✓ Health check endpoint
+- ✓ Lightweight client library
+- ✓ Resource limits
+- ✓ Graceful error handling
+
+**Future Enhancements**:
+- Persistent storage (ClickHouse, InfluxDB)
+- Prometheus metrics endpoint
+- Rate limiting on ingestion
+- Metric sampling for high volume
+- Multi-replica deployment
+- Dashboard integration (WebSocket)
+- Alerting on anomalies
+
+---
