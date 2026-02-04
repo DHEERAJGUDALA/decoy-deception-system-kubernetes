@@ -44,3 +44,8 @@ coverage.txt
 
 # IDE
 *.iml
+
+# Development documentation (kept locally only)
+ACTION_LOG.md
+PHASE*_*.md
+PHASE*_*.txt
