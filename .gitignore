@@ -1,0 +1,46 @@
+# Local tool configuration
+.claude/
+.anthropic/
+.cursor/
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.log
+*.swp
+*.swo
+*~
+
+# Build artifacts
+bin/
+dist/
+build/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go specific
+*.test
+*.out
+vendor/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.env.local
+
+# Kubernetes secrets
+*secret*.yaml
+*credentials*.yaml
+
+# Test coverage
+coverage.txt
+*.cover
+
+# IDE
+*.iml
