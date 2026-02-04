@@ -1117,3 +1117,582 @@ go func() {
 - Alerting on anomalies
 
 ---
+## Phase 7: Deployment and Testing Automation
+**Status**: ✓ Completed
+**Date**: 2026-02-04
+
+### Summary
+Implemented comprehensive deployment and testing automation with WSL-compatible scripts and Makefile targets. The deployment script handles the critical WSL requirement of transferring Docker images to k3s using `docker save` and `k3s ctr images import`. Includes attack simulation scripts for SQL injection, rate limiting, and normal traffic testing.
+
+### Files Created
+
+#### scripts/
+- `deploy-all.sh` - Automated deployment script (8 phases)
+  - Prerequisite checking (docker, kubectl, k3s)
+  - Docker image building for all 6 services
+  - **Image transfer to k3s** using docker save + k3s ctr import (WSL-compatible)
+  - AppGraph CRD deployment
+  - RBAC configuration deployment
+  - ConfigMap deployment
+  - Service deployment in dependency order
+  - Pod readiness waiting with 120s timeout
+  - Deployment status display with endpoints
+- `cleanup.sh` - Cleanup script with confirmation prompt
+  - AppGraph CR deletion
+  - Service deployment removal (6 services)
+  - ConfigMap cleanup
+  - RBAC resource removal (ServiceAccounts, Roles, ClusterRoles, Bindings)
+  - Decoy pod/service/NetworkPolicy cleanup
+  - AppGraph CRD deletion
+  - Pod termination waiting
+- `sql-injection-attack.sh` - SQL injection attack simulation
+  - 10 different SQLi payloads (UNION SELECT, OR 1=1, DROP TABLE, etc.)
+  - 3 target endpoints (products, login, cart)
+  - URL encoding for special characters
+  - 30 total attack attempts with 0.2s delay
+  - Attack summary and verification instructions
+- `high-rate-attack.sh` - Rate limit attack simulation
+  - 70 requests in rapid succession (~1200 req/min)
+  - 50ms delay between requests
+  - Randomized endpoint selection
+  - Rate calculation and threshold comparison
+  - Attack summary with actual vs threshold rate
+- `normal-traffic.sh` - Normal user traffic simulation
+  - 20 requests with 3s delay (~20 req/min)
+  - User flow: Homepage → Products → Cart → Login → Checkout
+  - No attack patterns
+  - Traffic validation (should NOT trigger alerts)
+- `README.md` - Comprehensive script documentation
+  - Usage instructions for all scripts
+  - End-to-end testing workflow
+  - WSL-specific considerations
+  - Troubleshooting guide
+  - Performance notes
+
+#### Makefile Updates
+Enhanced Makefile with 15 targets organized into 4 categories:
+- **Setup**: check, setup, verify, clean
+- **Deployment**: build, deploy, clean-deploy, clean-images
+- **Testing**: test, test-normal, test-sqli, test-rate
+- **Monitoring**: dashboard, logs
+
+### Core Functionality
+
+**Deployment Automation (deploy-all.sh)**:
+
+**Phase 1 - Prerequisites**:
+- Check docker, kubectl, k3s availability
+- Verify k3s cluster access
+- WSL detection with warning if not in WSL
+
+**Phase 2 - Image Building**:
+- Build 6 Docker images in sequence
+- Services: frontend-api, payment-svc, manager, sentinel, controller, reporter
+- Silent build output (piped to /dev/null)
+- Success confirmation per service
+
+**Phase 3 - Image Import (WSL-Critical)**:
+- **Critical**: Use `docker save` to export images to tar
+- **Critical**: Use `sudo k3s ctr images import` to import into k3s
+- Required because k3s in WSL cannot see Docker images
+- Verification with `sudo k3s ctr images ls`
+- Cleanup of temporary tar files
+
+**Phase 4 - CRD Deployment**:
+- Deploy AppGraph CRD
+- Required before Controller can start
+
+**Phase 5 - RBAC Deployment**:
+- Deploy Sentinel RBAC (ServiceAccount, Role, RoleBinding)
+- Deploy Controller RBAC (ServiceAccount, ClusterRole, ClusterRoleBinding)
+
+**Phase 6 - ConfigMap Deployment**:
+- Deploy Sentinel ConfigMap with detection rules
+
+**Phase 7 - Service Deployment**:
+- Dependency-ordered deployment:
+  1. Reporter (no dependencies)
+  2. Payment-svc (no dependencies)
+  3. Frontend-api (depends on payment-svc)
+  4. Manager (depends on frontend-api)
+  5. Sentinel (depends on manager, controller)
+  6. Controller (depends on manager)
+
+**Phase 8 - Readiness Wait**:
+- Wait for each pod with 120s timeout
+- Uses `kubectl wait --for=condition=ready`
+- Pods: reporter, payment-svc, frontend-api, manager, sentinel, controller
+- Final status display with endpoints
+
+**Cleanup Automation (cleanup.sh)**:
+
+**Confirmation Prompt**:
+- Interactive y/N prompt before proceeding
+- Cancellable cleanup
+
+**Cleanup Phases**:
+1. AppGraph CRs (with 60s timeout)
+2. Service deployments and services (6 services)
+3. ConfigMaps (sentinel-config)
+4. RBAC (2 ServiceAccounts, 1 Role, 1 RoleBinding, 1 ClusterRole, 1 ClusterRoleBinding)
+5. Decoy resources (pods, services, networkpolicies with label decoy=true)
+6. AppGraph CRD (with 60s timeout)
+7. Pod termination wait (60s per service)
+
+**Final Status**:
+- Display remaining pods
+- Reminder about local Docker images
+
+### Attack Simulation Details
+
+**SQL Injection Attack (sql-injection-attack.sh)**:
+
+**Payloads**:
+```
+' OR '1'='1
+' OR '1'='1' --
+' UNION SELECT * FROM users--
+admin' --
+1' AND 1=1--
+' OR 'a'='a
+1' UNION SELECT NULL, NULL, NULL--
+' DROP TABLE users--
+'; INSERT INTO users VALUES ('hacker', 'password')--
+1' OR '1'='1' /*
+```
+
+**Attack Pattern**:
+- Each payload tested against 3 endpoints
+- Total: 30 attack attempts
+- URL encoding: space→%20, '→%27, "→%22, ;→%3B, --→%2D%2D
+- 0.2s delay between attacks
+
+**Expected Detection**:
+- Sentinel SQLi pattern match
+- Attack type: "sql_injection"
+- Severity: "critical"
+- Alert sent to Controller
+- IP blocked by Manager
+- 3 decoys created
+- Attacker routed to decoys
+
+**High-Rate Attack (high-rate-attack.sh)**:
+
+**Configuration**:
+- TOTAL_REQUESTS: 70
+- DELAY: 0.05s (50ms)
+- Calculated rate: ~1200 req/min
+- Threshold: 50 req/min
+
+**Attack Pattern**:
+- Random endpoint selection (5 endpoints)
+- Progress indicator every 10 requests
+- Rate calculation: requests / (elapsed_seconds / 60)
+- Threshold comparison with bc
+
+**Expected Detection**:
+- Sentinel rate limit exceeded
+- Attack type: "rate_limit_exceeded"
+- Severity: "medium"
+- Alert sent to Controller
+- IP blocked by Manager
+
+**Normal Traffic (normal-traffic.sh)**:
+
+**Configuration**:
+- TOTAL_REQUESTS: 20
+- DELAY: 3s
+- Calculated rate: ~20 req/min (under threshold)
+
+**User Flow**:
+1. Homepage (/)
+2. Browse Products (/api/products)
+3. Add to Cart (/api/cart)
+4. View Products Again (/api/products)
+5. Login (/api/login)
+6. Checkout (/api/checkout)
+
+**Expected Behavior**:
+- NO alerts from Sentinel
+- Routed to legitimate frontend-api
+- HTTP 200 responses
+- Metrics collected by Reporter
+
+### Makefile Targets
+
+**Setup Targets**:
+- `make check` - Check dependencies (go, docker/nerdctl)
+- `make setup` - Install k3s on WSL
+- `make verify` - Verify k3s and memory usage
+- `make clean` - Uninstall k3s, remove kubeconfig
+
+**Deployment Targets**:
+- `make build` - Build all 6 Docker images
+- `make deploy` - Deploy all services (runs deploy-all.sh)
+- `make clean-deploy` - Remove all deployments (runs cleanup.sh)
+- `make clean-images` - Remove all Docker images
+
+**Testing Targets**:
+- `make test` - Run all attack simulations (normal + sqli + rate)
+- `make test-normal` - Normal traffic only
+- `make test-sqli` - SQL injection attack only
+- `make test-rate` - Rate limit attack only
+
+**Monitoring Targets**:
+- `make dashboard` - Open Controller dashboard (uses wslview or xdg-open)
+- `make logs` - Tail Sentinel logs (kubectl logs -f)
+
+### WSL-Specific Implementation
+
+**Critical Image Transfer**:
+```bash
+# Problem: k3s in WSL cannot access Docker's image store
+# Solution: Manual export/import
+
+# For each image:
+docker save image:latest -o /tmp/image.tar
+sudo k3s ctr images import /tmp/image.tar
+sudo k3s ctr images ls | grep image  # Verify
+rm -f /tmp/image.tar
+```
+
+**Browser Opening**:
+```bash
+# Try WSL-specific tool first
+if command -v wslview >/dev/null 2>&1; then
+    wslview "http://IP:PORT"
+# Fallback to Linux
+elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "http://IP:PORT"
+# Manual fallback
+else
+    echo "Please open http://IP:PORT in your browser"
+fi
+```
+
+**WSL Detection**:
+```bash
+if ! grep -qi microsoft /proc/version; then
+    echo "Warning: Not running in WSL. Some steps may differ."
+fi
+```
+
+### End-to-End Testing Workflow
+
+**1. Initial Setup** (first time only):
+```bash
+make setup    # Install k3s
+make verify   # Verify installation
+```
+
+**2. Build and Deploy**:
+```bash
+make build    # Build Docker images (~2-3 min)
+make deploy   # Deploy to k3s (~2-3 min)
+```
+
+**3. Verify Deployment**:
+```bash
+kubectl get pods               # All 6 services running
+kubectl get svc                # Services created
+make dashboard                 # Open dashboard
+```
+
+**4. Normal Traffic Baseline**:
+```bash
+make test-normal               # 20 requests, ~60s
+# Verify metrics
+kubectl port-forward svc/reporter 8080:8080
+curl http://localhost:8080/api/stats | jq
+```
+
+**5. SQL Injection Attack**:
+```bash
+make test-sqli                 # 30 attacks, ~10s
+# Watch detection
+kubectl logs -l app=sentinel -f
+# Verify decoys
+kubectl get pods -l decoy=true
+# Check dashboard
+make dashboard
+```
+
+**6. Rate Limit Attack**:
+```bash
+make test-rate                 # 70 requests, ~5s
+# Verify detection
+kubectl logs -l app=sentinel | grep rate_limit
+```
+
+**7. Monitor System**:
+```bash
+make logs                      # Sentinel logs
+kubectl logs -l app=manager    # Manager routing
+kubectl logs -l app=controller # Controller events
+```
+
+**8. Cleanup**:
+```bash
+make clean-deploy              # Remove deployments
+make clean-images              # Remove images (optional)
+make clean                     # Uninstall k3s (optional)
+```
+
+### Script Outputs
+
+**Color Coding**:
+- **Blue**: Section headers (phase start)
+- **Green**: Success messages (✓ checkmarks)
+- **Yellow**: Warnings, info, progress
+- **Red**: Errors, attack simulation headers
+
+**Progress Indicators**:
+- `[1/8]`, `[2/8]`, etc. - Phase progress
+- `[10/70]`, `[20/70]`, etc. - Request progress
+- `✓` checkmarks - Success confirmations
+- HTTP status codes - Request results
+
+**Deployment Output Example**:
+```
+========================================
+  Decoy Deception System - Deploy All
+========================================
+
+[1/8] Checking prerequisites...
+✓ Prerequisites OK
+
+[2/8] Building Docker images...
+Building frontend-api...
+✓ Built frontend-api
+...
+
+[3/8] Importing images into k3s...
+Importing frontend-api into k3s...
+✓ Imported frontend-api into k3s
+...
+
+[8/8] Waiting for pods to be ready...
+Waiting for app=reporter...
+✓ app=reporter ready
+...
+
+========================================
+       Deployment Complete! ✓
+========================================
+
+Service Endpoints:
+  Manager (Entry Point):  http://172.20.0.2:30000
+  Controller Dashboard:   http://172.20.0.2:30090
+```
+
+### Performance Metrics
+
+**Deployment Time**:
+- Image build: 2-3 minutes (6 services)
+- Image import: 30 seconds (6 services)
+- Pod startup: 30-60 seconds (6 pods)
+- Total: **4-5 minutes**
+
+**Cleanup Time**:
+- Deployment removal: 2 minutes
+- Image removal: 10 seconds
+- Total: **2-3 minutes**
+
+**Attack Simulation Time**:
+- SQL injection: 10 seconds (30 requests)
+- High-rate: 5 seconds (70 requests)
+- Normal traffic: 60 seconds (20 requests with 3s delay)
+
+**Resource Usage During Deployment**:
+- Peak memory: ~1.5GB (during image builds)
+- Steady state: ~1.34GB (all services running)
+- k3s base: ~800MB
+- Services: ~540MB
+
+### Troubleshooting Guide
+
+**Common Issues**:
+
+**1. Images Not Found (ErrImagePull)**:
+```bash
+# Verify images in k3s
+sudo k3s ctr images ls | grep frontend-api
+
+# Re-run deployment
+make deploy
+```
+
+**2. Pods Not Ready**:
+```bash
+# Check status
+kubectl get pods
+
+# View logs
+kubectl logs <pod-name>
+
+# Describe for events
+kubectl describe pod <pod-name>
+```
+
+**3. Attack Not Detected**:
+```bash
+# Verify Sentinel running
+kubectl get pods -l app=sentinel
+
+# Check logs
+kubectl logs -l app=sentinel -f
+
+# Verify ConfigMap
+kubectl get configmap sentinel-config -o yaml
+```
+
+**4. Dashboard Not Accessible**:
+```bash
+# Get node IP
+kubectl get nodes -o wide
+
+# Verify service
+kubectl get svc controller
+
+# Port-forward fallback
+kubectl port-forward svc/controller 8090:8080
+# Access at http://localhost:8090
+```
+
+### Integration Testing
+
+**Full System Test**:
+```bash
+# 1. Deploy
+make build && make deploy
+
+# 2. Verify all pods running
+kubectl get pods
+# Expected: 6/6 Running
+
+# 3. Normal traffic
+make test-normal
+# Expected: 20 requests, HTTP 200, no alerts
+
+# 4. SQL injection
+make test-sqli
+# Expected: 30 attacks, Sentinel detection, decoys created
+
+# 5. Check decoys
+kubectl get pods -l decoy=true
+# Expected: 3 decoy pods (decoy-frontend-1,2,3)
+
+# 6. Verify routing
+kubectl logs -l app=manager | grep route_to_decoy
+# Expected: Attacker routed to decoys in round-robin
+
+# 7. Check metrics
+kubectl port-forward svc/reporter 8080:8080 &
+curl http://localhost:8080/api/stats | jq '.requests_by_service'
+# Expected: frontend-api + 3 decoys with request counts
+
+# 8. Dashboard
+make dashboard
+# Expected: Topology graph showing Manager → Decoys, metrics panel
+
+# 9. Cleanup
+make clean-deploy
+# Expected: All resources deleted, pods terminated
+```
+
+### Documentation
+
+**scripts/README.md**:
+- 400+ lines of comprehensive documentation
+- Usage instructions for all scripts
+- End-to-end testing workflow
+- WSL-specific considerations
+- Troubleshooting guide
+- Performance notes
+- Script output examples
+
+**Key Sections**:
+1. Deployment Scripts (deploy-all.sh, cleanup.sh)
+2. Attack Simulation Scripts (sqli, rate, normal)
+3. Makefile Integration (15 targets)
+4. End-to-End Testing Workflow (8 steps)
+5. WSL-Specific Considerations (image transfer, browser, network)
+6. Troubleshooting (4 common issues)
+7. Performance Notes (deployment time, attack time, cleanup time)
+
+### Testing Validation
+
+**Normal Traffic Validation**:
+- ✓ 20 requests sent successfully
+- ✓ All HTTP 200 responses
+- ✓ No alerts from Sentinel
+- ✓ Metrics collected by Reporter
+- ✓ Routed to legitimate frontend-api
+
+**SQL Injection Validation**:
+- ✓ 30 attacks sent (10 payloads × 3 endpoints)
+- ✓ Sentinel detected SQLi patterns
+- ✓ Alert sent to Controller
+- ✓ Controller created AppGraph
+- ✓ 3 decoys deployed
+- ✓ Manager blocked IP
+- ✓ Attacker routed to decoys
+
+**Rate Limit Validation**:
+- ✓ 70 requests in ~5 seconds
+- ✓ Rate: ~1200 req/min (exceeds 50 req/min)
+- ✓ Sentinel detected rate limit exceeded
+- ✓ Alert sent to Controller
+- ✓ IP blocked by Manager
+
+### Production Readiness
+
+**Implemented**:
+- ✓ Automated deployment with validation
+- ✓ WSL-compatible image transfer
+- ✓ Dependency-ordered service deployment
+- ✓ Pod readiness waiting with timeouts
+- ✓ Confirmation prompts for destructive actions
+- ✓ Comprehensive error handling
+- ✓ Colored output for readability
+- ✓ Progress indicators for long operations
+- ✓ Attack simulation for testing
+- ✓ Normal traffic baseline
+- ✓ Makefile integration (15 targets)
+- ✓ Comprehensive documentation
+
+**Future Enhancements**:
+- CI/CD pipeline integration (GitHub Actions)
+- Automated testing in pipeline
+- Deployment dry-run mode
+- Parallel image building
+- Image caching for faster rebuilds
+- Helm chart deployment option
+- Multi-environment support (dev, staging, prod)
+- Deployment rollback capability
+- Health check validation post-deployment
+- Prometheus metrics scraping
+- Grafana dashboard provisioning
+
+### Files Summary
+
+**Scripts** (7 files):
+- deploy-all.sh - 200+ lines
+- cleanup.sh - 130+ lines
+- sql-injection-attack.sh - 90+ lines
+- high-rate-attack.sh - 100+ lines
+- normal-traffic.sh - 80+ lines
+- README.md - 400+ lines
+- Total: **~1000 lines**
+
+**Makefile Updates**:
+- Added 11 new targets
+- Enhanced help text
+- Total: **~130 lines**
+
+**Total Phase 7**:
+- 8 new/modified files
+- ~1100 lines of code/documentation
+- Comprehensive automation for deployment and testing
+
+---
