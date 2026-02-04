@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller
+  labels:
+    app: controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: controller
+  template:
+    metadata:
+      labels:
+        app: controller
+    spec:
+      serviceAccountName: controller
+      containers:
+      - name: controller
+        image: controller:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8090
+          name: dashboard
+        env:
+        - name: MANAGER_URL
+          value: "http://manager:8080"
+        - name: NAMESPACE
+          value: "default"
+        resources:
+          requests:
+            memory: "100Mi"
+            cpu: "100m"
+          limits:
+            memory: "100Mi"
+            cpu: "100m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8090
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8090
+          initialDelaySeconds: 5
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: controller
+  labels:
+    app: controller
+spec:
+  type: NodePort
+  ports:
+  - port: 8080
+    targetPort: 8090
+    nodePort: 30090
+    protocol: TCP
+    name: dashboard
+  selector:
+    app: controller

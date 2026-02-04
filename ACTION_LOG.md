@@ -463,3 +463,349 @@ Service     (Round-Robin)
 - Memory per blocked IP: ~200 bytes (negligible)
 
 ---
+
+## Phase 4: Sentinel Service (Attack Detection)
+**Status**: ✓ Completed
+**Date**: 2026-02-04
+
+### Summary
+Implemented Sentinel service that monitors pod logs via Kubernetes SharedInformer to detect attacks in real-time. Sentinel identifies SQL injection, path traversal, rate limiting violations, and authentication brute force attempts, then sends alerts to the Controller service for automated response. Includes RBAC configuration for secure pod log access and configurable detection thresholds via ConfigMap.
+
+### Files Created
+
+#### services/sentinel/
+- `go.mod` - Go module with Kubernetes client-go dependencies
+- `go.sum` - Dependency checksums (auto-generated)
+- `cmd/main.go` - Sentinel service implementation (470 lines)
+  - SharedInformer for pod watching
+  - Real-time log streaming and parsing
+  - Attack pattern detection (SQLi, path traversal, rate limit, auth failures)
+  - Attacker state tracking with cooldown
+  - HTTP alert posting to Controller
+- `Dockerfile` - Multi-stage Alpine build (CGO disabled, ~40-45MB image)
+- `USAGE.md` - Comprehensive usage guide and examples
+
+#### deploy/k8s/
+- `sentinel-rbac.yaml` - ServiceAccount, Role, RoleBinding
+  - Permissions: pods (get, list, watch), pods/log (get, list)
+- `sentinel-configmap.yaml` - Configuration for detection rules
+  - Attack patterns (SQLi, path traversal regex)
+  - Thresholds (rate limit: 50 req/min, auth failures: 3/min)
+  - Cooldown period: 5 minutes
+- `sentinel.yaml` - Deployment + Service
+  - Resource limits: 80Mi RAM / 50m CPU
+  - ServiceAccount binding for RBAC
+
+#### Documentation
+- `PHASE4_EXAMPLES.md` - Alert payload examples for all attack types
+
+### Core Functionality
+
+**Pod Log Monitoring**:
+- Uses Kubernetes SharedInformer for efficient pod watching
+- Watches pods with label selector (configurable, default: app=frontend-api)
+- Streams logs in real-time from all matching pods
+- Parses JSON-formatted logs to extract source_ip
+
+**Attack Detection**:
+
+1. **SQL Injection (SQLi)** - Severity: Critical
+   - Patterns: UNION SELECT, OR 1=1, INSERT INTO, DROP TABLE, SQL comments
+   - Regex-based detection with 4 pattern rules
+   - Detects both standard and obfuscated SQLi attempts
+
+2. **Path Traversal** - Severity: High
+   - Patterns: ../, ..\, URL-encoded variants (%2e%2e%2f)
+   - Single comprehensive regex pattern
+   - Catches directory traversal attempts
+
+3. **Rate Limit Exceeded** - Severity: Medium
+   - Threshold: >50 requests per minute from single IP
+   - Sliding window implementation
+   - Automatic window reset after timeout
+
+4. **Auth Failure Brute Force** - Severity: High
+   - Threshold: >3 authentication failures in 1 minute
+   - Detects: 401 status, "unauthorized", "authentication failed", "login failed"
+   - Sliding window with automatic reset
+
+**Attacker State Tracking**:
+```go
+type AttackerState struct {
+    RequestCount   int       // Requests in current window
+    AuthFailures   int       // Auth failures in current window
+    LastSeen       time.Time // Last request timestamp
+    FirstSeen      time.Time // Window start time
+    LastAlertTime  time.Time // Last alert sent
+    AlertsSent     int       // Total alerts for this IP
+}
+```
+
+**Alert Cooldown**:
+- 5-minute cooldown period per attacker IP
+- Prevents alert spam for persistent attackers
+- First attack triggers alert, subsequent attacks logged but not alerted
+- After cooldown expires, next attack triggers new alert
+
+### Alert Payload Structure
+
+```json
+{
+  "timestamp": "2026-02-04T16:30:00Z",
+  "attack_type": "sql_injection|path_traversal|rate_limit_exceeded|auth_failure_brute_force",
+  "source_ip": "192.168.1.100",
+  "evidence": "log_line_or_description",
+  "severity": "critical|high|medium",
+  "pod_name": "frontend-api-7d8f9c6b5-abc12",
+  "decoy_urls": [
+    "http://decoy-frontend-1:8080",
+    "http://decoy-frontend-2:8080",
+    "http://decoy-frontend-3:8080"
+  ]
+}
+```
+
+**Alert Fields**:
+- `timestamp`: ISO 8601 UTC timestamp
+- `attack_type`: Category of detected attack
+- `source_ip`: Attacker's IP address extracted from logs
+- `evidence`: Original log line or attack summary
+- `severity`: Risk level (critical/high/medium)
+- `pod_name`: Kubernetes pod that generated the log
+- `decoy_urls`: 3 decoy URLs for Manager to route attacker to
+
+### Kubernetes Integration
+
+**RBAC Requirements**:
+- ServiceAccount: `sentinel`
+- Role: `sentinel-role` (namespace-scoped)
+  - Permissions on `pods`: get, list, watch
+  - Permissions on `pods/log`: get, list
+- RoleBinding: `sentinel-rolebinding`
+
+**SharedInformer Benefits**:
+- Single watch connection to Kubernetes API (efficient)
+- Automatic caching and synchronization
+- Event-driven pod detection (AddFunc, UpdateFunc)
+- Built-in reconnection on failures
+- Low memory overhead
+
+**Log Streaming**:
+- Uses `clientset.CoreV1().Pods().GetLogs()` with streaming
+- `Follow: true` for real-time log tailing
+- `TailLines: 10` to catch recent logs on startup
+- Buffered reading (2000 bytes) for efficiency
+- Line-by-line processing with trimming
+
+### Configuration via ConfigMap
+
+All detection parameters configurable without code changes:
+
+```yaml
+controller_url: "http://controller:8080/api/alerts"
+namespace: "default"
+watch_labels: "app=frontend-api"
+rate_limit_threshold: "50"
+rate_limit_window: "1m"
+auth_failure_limit: "3"
+auth_failure_window: "1m"
+cooldown_period: "5m"
+```
+
+**Tunable Parameters**:
+- Attack pattern regexes (SQLi, path traversal)
+- Rate limit threshold and window
+- Auth failure threshold and window
+- Alert cooldown period
+- Decoy URLs for alerts
+
+### Source IP Extraction
+
+Two-tier extraction strategy:
+
+1. **JSON Parsing** (preferred):
+   - Parse log as JSON
+   - Extract `source_ip` field directly
+   - Works with structured logs from frontend-api/manager
+
+2. **Regex Fallback**:
+   - Pattern: `\b(?:\d{1,3}\.){3}\d{1,3}\b`
+   - Finds first IP address in log line
+   - Handles unstructured logs
+
+### Alert Delivery
+
+**HTTP POST to Controller**:
+- Endpoint: `http://controller:8080/api/alerts`
+- Content-Type: application/json
+- Timeout: 5 seconds
+- Async fire-and-forget (non-blocking)
+- Error logging for failed deliveries
+
+**Success Criteria**:
+- HTTP 200 OK or 201 Created from Controller
+- Alert marked as sent in attacker state
+- LastAlertTime updated for cooldown
+
+### Docker Build
+
+**Binary Size** (stripped): 37MB
+**Expected Image Size**: ~40-45MB (Alpine base + binary + ca-certificates)
+
+**Build Process**:
+- Builder stage: golang:1.21-alpine
+- Dependencies: k8s.io/client-go v0.28.0
+- CGO disabled for static binary
+- Binary stripping: -ldflags="-w -s"
+- Final stage: alpine:latest with ca-certificates
+- Non-root user: appuser:1000
+
+### Resource Allocation
+
+**Sentinel Service**:
+- Memory: 80Mi (request = limit)
+- CPU: 50m (request = limit)
+- QoS: Guaranteed
+
+**Updated System Total**:
+| Component | Memory | CPU | Phase |
+|-----------|--------|-----|-------|
+| k3s | ~800Mi | N/A | 1 |
+| frontend-api | 80Mi | 50m | 2 |
+| payment-svc | 40Mi | 30m | 2 |
+| manager | 60Mi | 50m | 3 |
+| sentinel | 80Mi | 50m | 4 |
+| **TOTAL** | **~1.06GB** | **180m** | **Within 2.5GB budget ✓** |
+
+### Detection Logic Flow
+
+```
+1. Pod logs → SharedInformer watches pods
+2. Log stream → Real-time log reading
+3. Parse log → Extract source_ip and content
+4. Check patterns → SQLi, path traversal, auth failure
+5. Check rate → Count requests per IP per window
+6. Detect attack → Pattern match or threshold exceeded
+7. Check cooldown → Ensure 5min since last alert
+8. Send alert → POST to Controller
+9. Update state → Record alert time, increment counter
+```
+
+### Example Attack Scenarios
+
+**SQL Injection**:
+```
+Request: GET /api/products?id=1' UNION SELECT * FROM users--
+Detection: SQLi pattern match
+Alert: attack_type="sql_injection", severity="critical"
+```
+
+**Path Traversal**:
+```
+Request: GET /api/file?path=../../../../etc/passwd
+Detection: Path traversal pattern match
+Alert: attack_type="path_traversal", severity="high"
+```
+
+**Rate Limiting**:
+```
+Scenario: 60 requests in 1 minute from 192.168.1.100
+Detection: Request count > 50 threshold
+Alert: attack_type="rate_limit_exceeded", severity="medium"
+```
+
+**Auth Brute Force**:
+```
+Scenario: 5 failed login attempts in 1 minute
+Detection: Auth failure count > 3 threshold
+Alert: attack_type="auth_failure_brute_force", severity="high"
+```
+
+### Integration Flow
+
+```
+Sentinel → Controller → Manager → Decoy Services
+
+1. Sentinel detects attack in logs
+2. Sentinel sends alert to Controller
+3. Controller calls Manager's /api/block_ip
+4. Manager routes attacker to decoys (round-robin)
+5. Attacker interacts with decoy environment
+```
+
+### Testing Commands
+
+**Deploy Sentinel**:
+```bash
+kubectl apply -f deploy/k8s/sentinel-rbac.yaml
+kubectl apply -f deploy/k8s/sentinel-configmap.yaml
+kubectl apply -f deploy/k8s/sentinel.yaml
+```
+
+**Test SQLi Detection**:
+```bash
+curl "http://NODE_IP:30000/api/products?id=1'%20UNION%20SELECT%20*%20FROM%20users--"
+kubectl logs -l app=sentinel | grep sql_injection
+```
+
+**Test Rate Limiting**:
+```bash
+for i in {1..60}; do curl -s http://NODE_IP:30000/api/products > /dev/null & done
+kubectl logs -l app=sentinel | grep rate_limit_exceeded
+```
+
+### Monitoring and Observability
+
+**Sentinel Logs** (JSON structured):
+- Detection events with attack type and source IP
+- Alert sent confirmations with Controller response
+- Cooldown skip events with reason
+- Error logs for failed alert deliveries
+
+**Key Metrics** (from logs):
+- Total alerts sent per IP
+- Alert types distribution
+- Cooldown effectiveness (skip count)
+- Controller response times
+
+### Limitations and Considerations
+
+**In-Memory State**:
+- Attacker states cleared on pod restart
+- No persistence of historical attacks
+- Suitable for transient attack detection
+
+**Pattern-Based Detection**:
+- Regex patterns may have false positives
+- Tune patterns in ConfigMap based on traffic
+- Consider ML-based detection in future
+
+**Single Replica**:
+- Current deployment: 1 replica
+- No high availability
+- Consider leader election for multi-replica (future)
+
+**Log Format Dependency**:
+- Requires JSON logs with source_ip field
+- Fallback regex for unstructured logs
+- Services must emit proper log format
+
+### Production Readiness
+
+**Implemented**:
+- ✓ RBAC with minimal required permissions
+- ✓ ConfigMap-based configuration
+- ✓ Cooldown to prevent alert spam
+- ✓ Graceful error handling
+- ✓ Non-blocking alert delivery
+- ✓ Resource limits
+
+**Future Enhancements**:
+- Multi-replica deployment with leader election
+- Persistent attack history (database)
+- ML-based anomaly detection
+- Custom alert destinations (Slack, PagerDuty)
+- Metrics endpoint (Prometheus)
+- Alert aggregation and batching
+
+---
