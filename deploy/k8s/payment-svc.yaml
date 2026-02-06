@@ -66,4 +66,4 @@ spec:
     protocol: TCP
     name: http
   selector:
-    app: payment-svc
+    app: payment-svc 
