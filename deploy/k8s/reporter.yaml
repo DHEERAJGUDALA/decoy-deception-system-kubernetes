@@ -62,4 +62,4 @@ spec:
     protocol: TCP
     name: http
   selector:
-    app: reporter
+    app: reporter 
