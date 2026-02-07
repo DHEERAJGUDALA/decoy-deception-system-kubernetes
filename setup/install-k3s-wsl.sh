@@ -1,11 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
-echo "========================================="
-echo "k3s Installation for WSL (Low Memory)"
-echo "========================================="
 
-# Check if running in WSL
+echo "k3s Installation for WSL (Low Memory)"
+
+## Check if running in WSL
 if ! grep -qi microsoft /proc/version; then
     echo "ERROR: This script must run in WSL"
     echo "Detected system: $(uname -a)"
@@ -14,7 +13,7 @@ fi
 
 echo "✓ WSL environment detected"
 
-# Check if k3s is already installed
+## Check if k3s is already installed
 if command -v k3s &> /dev/null; then
     echo "WARNING: k3s is already installed"
     k3s --version
@@ -53,9 +52,7 @@ if ! grep -q "KUBECONFIG=~/.kube/config" ~/.bashrc 2>/dev/null; then
 fi
 
 echo ""
-echo "========================================="
 echo "✓ k3s installation complete!"
-echo "========================================="
 echo ""
 echo "Configuration:"
 echo "  - kubeconfig: ~/.kube/config"
