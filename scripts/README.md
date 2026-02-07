@@ -15,11 +15,11 @@ Automated deployment script that:
 7. Displays deployment status and endpoints
 
 **Usage:**
-```bash
+ bash
 bash scripts/deploy-all.sh
 # or
 make deploy
-```
+ 
 
 **Prerequisites:**
 - k3s running on WSL
@@ -44,11 +44,11 @@ Cleanup script that removes all deployments:
 6. Deletes AppGraph CRD
 
 **Usage:**
-```bash
+ bash
 bash scripts/cleanup.sh
 # or
 make clean-deploy
-```
+ 
 
 **Confirmation:**
 Script prompts for confirmation before proceeding (y/N).
@@ -74,14 +74,14 @@ Simulates SQL injection attacks against the Manager endpoint.
 - Attacker routed to decoys in round-robin
 
 **Usage:**
-```bash
+ bash
 bash scripts/sql-injection-attack.sh
 # or
 make test-sqli
-```
+ 
 
 **Verification:**
-```bash
+ bash
 # Check Sentinel detection
 kubectl logs -l app=sentinel -f
 
@@ -90,7 +90,7 @@ kubectl logs -l app=manager | grep block_ip
 
 # View dashboard
 make dashboard
-```
+ 
 
 ### high-rate-attack.sh
 Simulates rate limit violation with rapid requests.
@@ -107,11 +107,11 @@ Simulates rate limit violation with rapid requests.
 - IP blocked and routed to decoys
 
 **Usage:**
-```bash
+ bash
 bash scripts/high-rate-attack.sh
 # or
 make test-rate
-```
+ 
 
 **Rate Calculation:**
 Script displays actual request rate and compares to threshold (50 req/min).
@@ -132,49 +132,49 @@ Simulates legitimate user traffic.
 - Normal HTTP 200 responses
 
 **Usage:**
-```bash
+ bash
 bash scripts/normal-traffic.sh
 # or
 make test-normal
-```
+ 
 
 **Verification:**
-```bash
+ bash
 # Check Reporter stats
 kubectl port-forward svc/reporter 8080:8080
 curl http://localhost:8080/api/stats | jq
-```
+ 
 
 ## Makefile Integration
 
 All scripts are integrated into the Makefile for easy access:
 
 ### Build & Deploy
-```bash
+ bash
 make build         # Build all Docker images
 make deploy        # Deploy all services
 make clean-deploy  # Remove deployments
 make clean-images  # Remove Docker images
-```
+ 
 
 ### Testing
-```bash
+ bash
 make test          # Run all attack simulations
 make test-normal   # Normal traffic only
 make test-sqli     # SQL injection only
 make test-rate     # Rate limit attack only
-```
+ 
 
 ### Monitoring
-```bash
+ bash
 make dashboard     # Open Controller dashboard
 make logs          # Tail Sentinel logs
-```
+ 
 
 ## End-to-End Testing Workflow
 
 ### 1. Deploy System
-```bash
+ bash
 # Setup k3s (first time only)
 make setup
 make verify
@@ -182,10 +182,10 @@ make verify
 # Build and deploy
 make build
 make deploy
-```
+ 
 
 ### 2. Verify Deployment
-```bash
+ bash
 # Check all pods running
 kubectl get pods
 
@@ -194,20 +194,20 @@ kubectl get svc
 
 # Open dashboard
 make dashboard
-```
+ 
 
 ### 3. Run Normal Traffic
-```bash
+ bash
 # Baseline traffic
 make test-normal
 
 # Verify metrics
 kubectl port-forward svc/reporter 8080:8080
 curl http://localhost:8080/api/stats | jq
-```
+ 
 
 ### 4. Simulate Attacks
-```bash
+bash:
 # SQL injection attack
 make test-sqli
 
@@ -219,19 +219,19 @@ kubectl get pods -l decoy=true
 
 # Check dashboard for topology
 make dashboard
-```
+ 
 
 ### 5. Rate Limit Attack
-```bash
+bash:
 # High-rate attack
 make test-rate
 
 # Verify rate detection
 kubectl logs -l app=sentinel | grep rate_limit_exceeded
-```
+
 
 ### 6. Monitor System
-```bash
+bash:
 # View Sentinel logs
 make logs
 
@@ -244,10 +244,10 @@ kubectl logs -l app=controller
 # Check Reporter metrics
 kubectl port-forward svc/reporter 8080:8080
 curl http://localhost:8080/api/stats | jq
-```
+
 
 ### 7. Cleanup
-```bash
+bash:
 # Remove deployments
 make clean-deploy
 
@@ -256,7 +256,7 @@ make clean-images
 
 # Uninstall k3s (optional)
 make clean
-```
+
 
 ## WSL-Specific Considerations
 
@@ -281,16 +281,16 @@ WSL uses a virtual network. Access services via:
 
 ### Images Not Found
 If pods show `ErrImagePull`:
-```bash
+bash:
 # Verify images in k3s
 sudo k3s ctr images ls | grep -E 'frontend-api|payment-svc|manager|sentinel|controller|reporter'
 
 # Re-run deployment
 make deploy
-```
+
 
 ### Pods Not Ready
-```bash
+bash:
 # Check pod status
 kubectl get pods
 
@@ -299,10 +299,10 @@ kubectl logs <pod-name>
 
 # Describe pod for events
 kubectl describe pod <pod-name>
-```
+
 
 ### Attack Not Detected
-```bash
+bash:
 # Verify Sentinel is running
 kubectl get pods -l app=sentinel
 
@@ -311,10 +311,10 @@ kubectl logs -l app=sentinel -f
 
 # Verify ConfigMap
 kubectl get configmap sentinel-config -o yaml
-```
+
 
 ### Dashboard Not Accessible
-```bash
+bash:
 # Get node IP
 kubectl get nodes -o wide
 
@@ -324,7 +324,7 @@ kubectl get svc controller
 # Port-forward if NodePort issue
 kubectl port-forward svc/controller 8090:8080
 # Access at http://localhost:8090
-```
+
 
 ## Script Outputs
 
