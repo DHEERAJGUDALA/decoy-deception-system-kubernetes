@@ -62,4 +62,4 @@ spec:
     protocol: TCP
     name: dashboard
   selector:
-    app: controller
+    app: controller 

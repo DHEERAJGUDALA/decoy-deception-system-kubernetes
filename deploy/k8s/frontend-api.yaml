@@ -70,4 +70,4 @@ spec:
     protocol: TCP
     name: http
   selector:
-    app: frontend-api
+    app: frontend-api 

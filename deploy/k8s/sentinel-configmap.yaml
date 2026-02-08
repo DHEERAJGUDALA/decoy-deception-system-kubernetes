@@ -39,4 +39,4 @@ data:
   cooldown_period: "5m"
   
   # Decoy URLs (comma-separated)
-  decoy_urls: "http://decoy-frontend-1:8080,http://decoy-frontend-2:8080,http://decoy-frontend-3:8080"
+  decoy_urls: "http://decoy-frontend-1:8080,http://decoy-frontend-2:8080,http://decoy-frontend-3:8080" 
