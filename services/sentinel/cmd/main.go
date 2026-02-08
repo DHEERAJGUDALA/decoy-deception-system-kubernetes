@@ -35,31 +35,31 @@ type Config struct {
 }
 
 type Alert struct {
-	Timestamp   string   `json:"timestamp"`
-	AttackType  string   `json:"attack_type"`
-	SourceIP    string   `json:"source_ip"`
-	Evidence    string   `json:"evidence"`
-	Severity    string   `json:"severity"`
-	PodName     string   `json:"pod_name"`
-	DecoyURLs   []string `json:"decoy_urls,omitempty"`
+	Timestamp  string   `json:"timestamp"`
+	AttackType string   `json:"attack_type"`
+	SourceIP   string   `json:"source_ip"`
+	Evidence   string   `json:"evidence"`
+	Severity   string   `json:"severity"`
+	PodName    string   `json:"pod_name"`
+	DecoyURLs  []string `json:"decoy_urls,omitempty"`
 }
 
 type AttackerState struct {
-	RequestCount   int
-	AuthFailures   int
-	LastSeen       time.Time
-	FirstSeen      time.Time
-	LastAlertTime  time.Time
-	AlertsSent     int
+	RequestCount  int
+	AuthFailures  int
+	LastSeen      time.Time
+	FirstSeen     time.Time
+	LastAlertTime time.Time
+	AlertsSent    int
 }
 
 type Sentinel struct {
-	config          Config
-	clientset       *kubernetes.Clientset
-	sqliPatterns    []*regexp.Regexp
-	pathTraversal   *regexp.Regexp
-	attackerStates  map[string]*AttackerState
-	mu              sync.RWMutex
+	config         Config
+	clientset      *kubernetes.Clientset
+	sqliPatterns   []*regexp.Regexp
+	pathTraversal  *regexp.Regexp
+	attackerStates map[string]*AttackerState
+	mu             sync.RWMutex
 }
 
 func loadConfig() Config {

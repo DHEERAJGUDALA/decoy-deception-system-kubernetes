@@ -12,13 +12,13 @@ import (
 )
 
 type Config struct {
-	Port           string
-	IsDecoy        bool
-	DecoyType      string
-	DecoyLatency   int
-	DecoyLogging   string
-	PaymentURL     string
-	ReporterURL    string
+	Port         string
+	IsDecoy      bool
+	DecoyType    string
+	DecoyLatency int
+	DecoyLogging string
+	PaymentURL   string
+	ReporterURL  string
 }
 
 type Product struct {

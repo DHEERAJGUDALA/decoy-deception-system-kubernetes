@@ -10,9 +10,9 @@ import (
 )
 
 type Config struct {
-	Port             string
-	HistoryDuration  time.Duration
-	CleanupInterval  time.Duration
+	Port            string
+	HistoryDuration time.Duration
+	CleanupInterval time.Duration
 }
 
 type Metric struct {
@@ -27,15 +27,15 @@ type Metric struct {
 }
 
 type AggregatedStats struct {
-	TotalRequests       int                       `json:"total_requests"`
-	RequestsByService   map[string]int            `json:"requests_by_service"`
-	RequestsByIP        map[string]int            `json:"requests_by_ip"`
-	RequestsByPath      map[string]int            `json:"requests_by_path"`
-	AverageLatency      float64                   `json:"average_latency_ms"`
-	StatusCodeCounts    map[int]int               `json:"status_code_counts"`
-	UniqueIPs           int                       `json:"unique_ips"`
-	TimeRange           string                    `json:"time_range"`
-	LastUpdated         string                    `json:"last_updated"`
+	TotalRequests     int            `json:"total_requests"`
+	RequestsByService map[string]int `json:"requests_by_service"`
+	RequestsByIP      map[string]int `json:"requests_by_ip"`
+	RequestsByPath    map[string]int `json:"requests_by_path"`
+	AverageLatency    float64        `json:"average_latency_ms"`
+	StatusCodeCounts  map[int]int    `json:"status_code_counts"`
+	UniqueIPs         int            `json:"unique_ips"`
+	TimeRange         string         `json:"time_range"`
+	LastUpdated       string         `json:"last_updated"`
 }
 
 type Reporter struct {
@@ -133,24 +133,24 @@ func (r *Reporter) getAggregatedStats() AggregatedStats {
 
 		// Aggregate stats
 		stats.TotalRequests++
-		
+
 		if m.Service != "" {
 			stats.RequestsByService[m.Service]++
 		}
-		
+
 		if m.SourceIP != "" {
 			stats.RequestsByIP[m.SourceIP]++
 			uniqueIPs[m.SourceIP] = true
 		}
-		
+
 		if m.Path != "" {
 			stats.RequestsByPath[m.Path]++
 		}
-		
+
 		if m.StatusCode > 0 {
 			stats.StatusCodeCounts[m.StatusCode]++
 		}
-		
+
 		if m.Latency > 0 {
 			totalLatency += m.Latency
 			latencyCount++
@@ -164,7 +164,7 @@ func (r *Reporter) getAggregatedStats() AggregatedStats {
 	}
 
 	duration := newest.Sub(oldest)
-	stats.TimeRange = oldest.Format(time.RFC3339) + " to " + newest.Format(time.RFC3339) + 
+	stats.TimeRange = oldest.Format(time.RFC3339) + " to " + newest.Format(time.RFC3339) +
 		" (" + duration.Round(time.Second).String() + ")"
 
 	return stats
@@ -274,9 +274,9 @@ func (r *Reporter) handleHealth(w http.ResponseWriter, req *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":        "healthy",
-		"service":       "reporter",
-		"metric_count":  metricCount,
+		"status":           "healthy",
+		"service":          "reporter",
+		"metric_count":     metricCount,
 		"history_duration": r.config.HistoryDuration.String(),
 	})
 }

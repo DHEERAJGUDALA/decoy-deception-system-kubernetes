@@ -39,8 +39,8 @@ type IPManager struct {
 }
 
 var (
-	config    Config
-	ipManager *IPManager
+	config     Config
+	ipManager  *IPManager
 	legitProxy *httputil.ReverseProxy
 )
 
@@ -66,9 +66,9 @@ func (m *IPManager) BlockIP(sourceIP string, decoyURLs []string) {
 	}
 
 	logData := map[string]interface{}{
-		"timestamp": time.Now().UTC().Format(time.RFC3339),
-		"action":    "block_ip",
-		"source_ip": sourceIP,
+		"timestamp":  time.Now().UTC().Format(time.RFC3339),
+		"action":     "block_ip",
+		"source_ip":  sourceIP,
 		"decoy_urls": decoyURLs,
 	}
 	logJSON, _ := json.Marshal(logData)
@@ -112,10 +112,10 @@ func (m *IPManager) GetDecoyURL(sourceIP string) (string, bool) {
 	blocked.Counter++
 
 	logData := map[string]interface{}{
-		"timestamp":    time.Now().UTC().Format(time.RFC3339),
-		"action":       "route_to_decoy",
-		"source_ip":    sourceIP,
-		"selected_url": selectedURL,
+		"timestamp":         time.Now().UTC().Format(time.RFC3339),
+		"action":            "route_to_decoy",
+		"source_ip":         sourceIP,
+		"selected_url":      selectedURL,
 		"round_robin_count": blocked.Counter,
 	}
 	logJSON, _ := json.Marshal(logData)

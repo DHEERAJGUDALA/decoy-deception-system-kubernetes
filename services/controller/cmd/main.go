@@ -19,9 +19,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -38,21 +38,21 @@ type AppGraph struct {
 }
 
 type AppGraphSpec struct {
-	Services            []string `json:"services"`
-	DecoyCount          int      `json:"decoyCount"`
-	AutoCleanupMinutes  int      `json:"autoCleanupMinutes"`
-	SourceIP            string   `json:"sourceIP"`
-	AttackType          string   `json:"attackType"`
-	Severity            string   `json:"severity,omitempty"`
+	Services           []string `json:"services"`
+	DecoyCount         int      `json:"decoyCount"`
+	AutoCleanupMinutes int      `json:"autoCleanupMinutes"`
+	SourceIP           string   `json:"sourceIP"`
+	AttackType         string   `json:"attackType"`
+	Severity           string   `json:"severity,omitempty"`
 }
 
 type AppGraphStatus struct {
-	Phase               string    `json:"phase,omitempty"`
-	DecoyPods           []string  `json:"decoyPods,omitempty"`
-	DecoyURLs           []string  `json:"decoyURLs,omitempty"`
-	CreatedAt           string    `json:"createdAt,omitempty"`
-	CleanupScheduledAt  string    `json:"cleanupScheduledAt,omitempty"`
-	Message             string    `json:"message,omitempty"`
+	Phase              string   `json:"phase,omitempty"`
+	DecoyPods          []string `json:"decoyPods,omitempty"`
+	DecoyURLs          []string `json:"decoyURLs,omitempty"`
+	CreatedAt          string   `json:"createdAt,omitempty"`
+	CleanupScheduledAt string   `json:"cleanupScheduledAt,omitempty"`
+	Message            string   `json:"message,omitempty"`
 }
 
 type AppGraphList struct {
@@ -88,9 +88,9 @@ func (a *AppGraphList) DeepCopyList() *AppGraphList {
 }
 
 var (
-	GroupVersion = schema.GroupVersion{Group: "deception.k8s.io", Version: "v1"}
+	GroupVersion  = schema.GroupVersion{Group: "deception.demo", Version: "v1"}
 	SchemeBuilder = runtime.NewSchemeBuilder(addKnownTypes)
-	AddToScheme = SchemeBuilder.AddToScheme
+	AddToScheme   = SchemeBuilder.AddToScheme
 )
 
 func addKnownTypes(scheme *runtime.Scheme) error {
@@ -104,13 +104,13 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 
 // Alert from Sentinel
 type Alert struct {
-	Timestamp   string   `json:"timestamp"`
-	AttackType  string   `json:"attack_type"`
-	SourceIP    string   `json:"source_ip"`
-	Evidence    string   `json:"evidence"`
-	Severity    string   `json:"severity"`
-	PodName     string   `json:"pod_name"`
-	DecoyURLs   []string `json:"decoy_urls,omitempty"`
+	Timestamp  string   `json:"timestamp"`
+	AttackType string   `json:"attack_type"`
+	SourceIP   string   `json:"source_ip"`
+	Evidence   string   `json:"evidence"`
+	Severity   string   `json:"severity"`
+	PodName    string   `json:"pod_name"`
+	DecoyURLs  []string `json:"decoy_urls,omitempty"`
 }
 
 // WebSocket Event
@@ -123,13 +123,13 @@ type WSEvent struct {
 // Controller
 type AppGraphController struct {
 	client.Client
-	Clientset      *kubernetes.Clientset
-	Scheme         *runtime.Scheme
-	ManagerURL     string
-	Namespace      string
-	wsClients      map[*websocket.Conn]bool
-	wsClientsMu    sync.RWMutex
-	wsBroadcast    chan WSEvent
+	Clientset   *kubernetes.Clientset
+	Scheme      *runtime.Scheme
+	ManagerURL  string
+	Namespace   string
+	wsClients   map[*websocket.Conn]bool
+	wsClientsMu sync.RWMutex
+	wsBroadcast chan WSEvent
 }
 
 var upgrader = websocket.Upgrader{
@@ -142,7 +142,7 @@ func (c *AppGraphController) broadcastEvent(eventType string, data map[string]in
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		Data:      data,
 	}
-	
+
 	select {
 	case c.wsBroadcast <- event:
 	default:
@@ -279,18 +279,18 @@ func (c *AppGraphController) createDecoys(ctx context.Context, ag *AppGraph) err
 
 	for i, decoyType := range decoyTypes {
 		podName := fmt.Sprintf("decoy-%s-%s-%d", ag.Name, ag.Spec.SourceIP[:min(8, len(ag.Spec.SourceIP))], i+1)
-		
+
 		// Create Pod
 		pod := &corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      podName,
 				Namespace: c.Namespace,
 				Labels: map[string]string{
-					"app":          "decoy",
-					"appgraph":     ag.Name,
-					"decoy-type":   decoyType,
-					"source-ip":    ag.Spec.SourceIP,
-					"attack-type":  ag.Spec.AttackType,
+					"app":         "decoy",
+					"appgraph":    ag.Name,
+					"decoy-type":  decoyType,
+					"source-ip":   ag.Spec.SourceIP,
+					"attack-type": ag.Spec.AttackType,
 				},
 			},
 			Spec: corev1.PodSpec{
@@ -320,7 +320,7 @@ func (c *AppGraphController) createDecoys(ctx context.Context, ag *AppGraph) err
 			},
 		}
 
-		if err := c.Clientset.CoreV1().Pods(c.Namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+		if _, err := c.Clientset.CoreV1().Pods(c.Namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 			return fmt.Errorf("failed to create pod %s: %v", podName, err)
 		}
 
@@ -355,7 +355,7 @@ func (c *AppGraphController) createNetworkPolicy(ctx context.Context, podName st
 		Spec: networkingv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{
 				MatchLabels: map[string]string{
-					"app": "decoy",
+					"app":      "decoy",
 					"appgraph": ag.Name,
 				},
 			},
@@ -463,8 +463,8 @@ func (c *AppGraphController) handleAlerts(w http.ResponseWriter, r *http.Request
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"message": "Alert processed and decoys scheduled",
+		"success":  true,
+		"message":  "Alert processed and decoys scheduled",
 		"appgraph": ag.Name,
 	})
 }
@@ -511,14 +511,18 @@ func main() {
 	_ = AddToScheme(scheme)
 
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
-		Scheme:    scheme,
-		Namespace: namespace,
+		Scheme: scheme,
+		Cache: cache.Options{
+			DefaultNamespaces: map[string]cache.Config{
+				namespace: {},
+			},
+		},
 	})
 	if err != nil {
 		log.Fatalf("[FATAL] Failed to create manager: %v", err)
 	}
 
-	clientset := kubernetes.NewForConfig(cfg)
+	clientset, err := kubernetes.NewForConfig(cfg)
 
 	agController := &AppGraphController{
 		Client:      mgr.GetClient(),
@@ -541,7 +545,7 @@ func main() {
 		log.Fatalf("[FATAL] Failed to create controller: %v", err)
 	}
 
-	if err := c.Watch(&source.Kind{Type: &AppGraph{}}, &handler.EnqueueRequestForObject{}); err != nil {
+	if err := c.Watch(source.Kind(mgr.GetCache(), &AppGraph{}), &handler.EnqueueRequestForObject{}); err != nil {
 		log.Fatalf("[FATAL] Failed to watch AppGraph: %v", err)
 	}
 

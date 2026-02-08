@@ -30,7 +30,7 @@ if ! command -v kubectl &> /dev/null; then
     exit 1
 fi
 
-if ! sudo k3s kubectl get nodes &> /dev/null; then
+if ! kubectl get nodes &> /dev/null; then
     echo -e "${RED}Error: k3s not running or not accessible${NC}"
     exit 1
 fi
@@ -54,7 +54,7 @@ for service_def in "${SERVICES[@]}"; do
     echo -e "${YELLOW}Building ${service_name}...${NC}"
 
     if [ -f "${service_path}/Dockerfile" ]; then
-        docker build -t "${service_name}:latest" "${service_path}" > /dev/null 2>&1
+        docker build --network=host -t "${service_name}:latest" "${service_path}" > /dev/null 2>&1
         echo -e "${GREEN}✓ Built ${service_name}${NC}"
     else
         echo -e "${RED}Error: Dockerfile not found at ${service_path}${NC}"
@@ -75,10 +75,10 @@ for service_def in "${SERVICES[@]}"; do
     docker save "${service_name}:latest" -o "${TEMP_TAR}" > /dev/null 2>&1
 
     # Import into k3s
-    sudo k3s ctr images import "${TEMP_TAR}" > /dev/null 2>&1
+    docker run --rm -v /run/k3s/containerd/containerd.sock:/run/k3s/containerd/containerd.sock -v "${TEMP_TAR}:${TEMP_TAR}" --entrypoint ctr rancher/k3s:v1.28.2-k3s1 images import "${TEMP_TAR}" > /dev/null 2>&1
 
     # Verify import
-    if sudo k3s ctr images ls | grep -q "${service_name}"; then
+    if docker run --rm -v /run/k3s/containerd/containerd.sock:/run/k3s/containerd/containerd.sock --entrypoint ctr rancher/k3s:v1.28.2-k3s1 images ls | grep -q "${service_name}"; then
         echo -e "${GREEN}✓ Imported ${service_name} into k3s${NC}"
     else
         echo -e "${RED}Error: Failed to import ${service_name}${NC}"
@@ -92,20 +92,20 @@ echo ""
 
 # Deploy AppGraph CRD
 echo -e "${BLUE}[4/8] Deploying AppGraph CRD...${NC}"
-kubectl apply -f deploy/k8s/appgraph-crd.yaml > /dev/null 2>&1
+kubectl apply -f deploy/k8s/appgraph-crd.yaml
 echo -e "${GREEN}✓ AppGraph CRD deployed${NC}"
 echo ""
 
 # Deploy RBAC
 echo -e "${BLUE}[5/8] Deploying RBAC configurations...${NC}"
-kubectl apply -f deploy/k8s/sentinel-rbac.yaml > /dev/null 2>&1
-kubectl apply -f deploy/k8s/controller-rbac.yaml > /dev/null 2>&1
+kubectl apply -f deploy/k8s/sentinel-rbac.yaml
+kubectl apply -f deploy/k8s/controller-rbac.yaml
 echo -e "${GREEN}✓ RBAC configurations deployed${NC}"
 echo ""
 
 # Deploy ConfigMaps
 echo -e "${BLUE}[6/8] Deploying ConfigMaps...${NC}"
-kubectl apply -f deploy/k8s/sentinel-configmap.yaml > /dev/null 2>&1
+kubectl apply -f deploy/k8s/sentinel-configmap.yaml
 echo -e "${GREEN}✓ ConfigMaps deployed${NC}"
 echo ""
 

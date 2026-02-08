@@ -90,8 +90,8 @@ echo -e "${GREEN}✓ Decoy resources cleaned${NC}"
 echo ""
 
 echo -e "${BLUE}[6/6] Deleting AppGraph CRD...${NC}"
-if kubectl get crd appgraphs.deception.k8s.io &> /dev/null; then
-    kubectl delete crd appgraphs.deception.k8s.io --timeout=60s > /dev/null 2>&1 || true
+if kubectl get crd appgraphs.deception.demo &> /dev/null; then
+    kubectl delete crd appgraphs.deception.demo --timeout=60s > /dev/null 2>&1 || true
     echo -e "${GREEN}✓ AppGraph CRD deleted${NC}"
 fi
 echo ""

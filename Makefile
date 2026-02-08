@@ -67,13 +67,13 @@ clean:
 
 # Build all Docker images
 build:
-	@echo "Building Docker images..."
-	@bash -c 'cd services/frontend-api && docker build -t frontend-api:latest . && echo "✓ frontend-api built"'
-	@bash -c 'cd services/payment-svc && docker build -t payment-svc:latest . && echo "✓ payment-svc built"'
-	@bash -c 'cd services/manager && docker build -t manager:latest . && echo "✓ manager built"'
-	@bash -c 'cd services/sentinel && docker build -t sentinel:latest . && echo "✓ sentinel built"'
-	@bash -c 'cd services/controller && docker build -t controller:latest . && echo "✓ controller built"'
-	@bash -c 'cd services/reporter && docker build -t reporter:latest . && echo "✓ reporter built"'
+	@echo "Building Docker images with host networking..."
+	@bash -c 'cd services/frontend-api && docker build --network=host -t frontend-api:latest . && echo "✓ frontend-api built"'
+	@bash -c 'cd services/payment-svc && docker build --network=host -t payment-svc:latest . && echo "✓ payment-svc built"'
+	@bash -c 'cd services/manager && docker build --network=host -t manager:latest . && echo "✓ manager built"'
+	@bash -c 'cd services/sentinel && docker build --network=host -t sentinel:latest . && echo "✓ sentinel built"'
+	@bash -c 'cd services/controller && docker build --network=host -t controller:latest . && echo "✓ controller built"'
+	@bash -c 'cd services/reporter && docker build --network=host -t reporter:latest . && echo "✓ reporter built"'
 	@echo "✓ All images built successfully"
 
 # Deploy all services to k3s

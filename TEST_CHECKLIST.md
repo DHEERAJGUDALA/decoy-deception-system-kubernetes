@@ -88,7 +88,7 @@ This document provides a comprehensive test checklist for validating the Decoy D
 
 - [ ] **CRD Installed**
   ```bash
-  kubectl get crd appgraphs.deception.k8s.io
+  kubectl get crd appgraphs.deception.demo
   ```
   Expected: CRD found
 
@@ -571,7 +571,7 @@ This document provides a comprehensive test checklist for validating the Decoy D
 
 - [ ] **CRD Still Present (Not Deleted by clean-deploy)**
   ```bash
-  kubectl get crd appgraphs.deception.k8s.io
+  kubectl get crd appgraphs.deception.demo
   ```
   Expected: CRD found (clean-deploy doesn't remove CRD)
 

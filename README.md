@@ -495,7 +495,7 @@ kubectl auth can-i create pods --as=system:serviceaccount:default:controller
 kubectl get clusterrole controller-role -o yaml
 
 # Verify AppGraph CRD
-kubectl get crd appgraphs.deception.k8s.io
+kubectl get crd appgraphs.deception.demo
 
 # Check Controller events
 kubectl describe pod -l app=controller

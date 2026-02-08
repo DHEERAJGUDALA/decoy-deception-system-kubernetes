@@ -10,10 +10,10 @@ metadata:
   name: controller-role
 rules:
 # AppGraph CRD permissions
-- apiGroups: ["deception.k8s.io"]
+- apiGroups: ["deception.demo"]
   resources: ["appgraphs"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-- apiGroups: ["deception.k8s.io"]
+- apiGroups: ["deception.demo"]
   resources: ["appgraphs/status"]
   verbs: ["get", "update", "patch"]
 # Pod management
