@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Deception System Live Threat Monitor</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="top-bar">
+        <div class="top-left">
+          <h1>🛡️ Deception System — Live Threat Monitor</h1>
+        </div>
+        <div class="top-right">
+          <div class="metric-block">
+            <span class="metric-label">Clock</span>
+            <span id="live-clock" class="metric-value">--:--:--</span>
+          </div>
+          <div class="metric-block">
+            <span class="metric-label">Pods</span>
+            <span class="metric-value">
+              Real: <strong id="summary-real">0</strong>
+              Decoys: <strong id="summary-decoy">0</strong>
+              Gateway: <strong id="summary-gateway">0</strong>
+            </span>
+          </div>
+          <div class="metric-block attack-pill">
+            <span class="metric-label">Attacks</span>
+            <span id="attack-counter" class="metric-value">0</span>
+          </div>
+        </div>
+      </header>
+
+      <main class="main-layout">
+        <section class="graph-panel">
+          <div class="panel-title-row">
+            <h2>Live Topology Graph</h2>
+            <div id="connection-status" class="connection-status status-warn">CONNECTING</div>
+          </div>
+
+          <div class="legend">
+            <div class="legend-item"><span class="swatch sw-real"></span>Real</div>
+            <div class="legend-item"><span class="swatch sw-decoy"></span>Decoy</div>
+            <div class="legend-item"><span class="swatch sw-gateway"></span>Gateway</div>
+            <div class="legend-item"><span class="swatch sw-attacker"></span>Attacker</div>
+            <div class="legend-item"><span class="swatch sw-monitor"></span>Monitoring</div>
+          </div>
+
+          <div id="graph-wrap">
+            <svg id="graph-svg" aria-label="Force directed threat graph"></svg>
+            <div id="tooltip" class="tooltip hidden"></div>
+          </div>
+        </section>
+
+        <aside class="events-panel">
+          <div class="panel-title-row">
+            <h2>Live Event Feed</h2>
+            <span id="event-count">0</span>
+          </div>
+          <div id="event-feed" class="event-feed"></div>
+        </aside>
+      </main>
+
+      <footer class="bottom-bar">
+        <div class="bottom-metric">Total attacks detected: <strong id="stat-attacks">0</strong></div>
+        <div class="bottom-metric">Total decoys spawned: <strong id="stat-decoys-spawned">0</strong></div>
+        <div class="bottom-metric">Total decoys cleaned: <strong id="stat-decoys-cleaned">0</strong></div>
+        <div class="bottom-metric">Active decoy sets: <strong id="stat-active-sets">0</strong></div>
+      </footer>
+    </div>
+
+    <script src="/vendor/d3.min.js"></script>
+    <script src="/graph.js"></script>
+  </body>
+</html>

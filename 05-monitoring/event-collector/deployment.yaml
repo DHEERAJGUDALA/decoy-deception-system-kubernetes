@@ -1,0 +1,101 @@
+# =============================================================================
+# Event Collector — Deployment + Service
+# =============================================================================
+# Bridges Redis/Kubernetes events to dashboard clients:
+#   - WebSocket server :8090 for real-time event stream
+#   - REST API :8091 for recent event history + health endpoint
+#
+# Uses read-only "event-collector" ServiceAccount from 01-namespaces/rbac.yaml.
+# Watches cluster resources but does not create/modify/delete Kubernetes objects.
+# =============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: event-collector
+  namespace: monitoring
+  labels:
+    app: event-collector
+    app.kubernetes.io/part-of: deception-system
+    app.kubernetes.io/component: event-collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: event-collector
+  template:
+    metadata:
+      labels:
+        app: event-collector
+        app.kubernetes.io/part-of: deception-system
+        app.kubernetes.io/component: event-collector
+    spec:
+      serviceAccountName: event-collector
+      containers:
+        - name: event-collector
+          image: deception/event-collector:latest
+          imagePullPolicy: Never
+          ports:
+            - name: websocket
+              containerPort: 8090
+              protocol: TCP
+            - name: rest
+              containerPort: 8091
+              protocol: TCP
+          env:
+            - name: REDIS_URL
+              value: redis://redis.monitoring.svc.cluster.local:6379
+            - name: WEBSOCKET_PORT
+              value: "8090"
+            - name: REST_PORT
+              value: "8091"
+            - name: GRAPH_INTERVAL_SECONDS
+              value: "5"
+            - name: MONITORED_NAMESPACES
+              value: ecommerce-real,deception-gateway,decoy-pool,monitoring
+          resources:
+            requests:
+              cpu: 50m
+              memory: 48Mi
+            limits:
+              cpu: 100m
+              memory: 96Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8091
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8091
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: event-collector
+  namespace: monitoring
+  labels:
+    app: event-collector
+    app.kubernetes.io/part-of: deception-system
+    app.kubernetes.io/component: event-collector
+spec:
+  type: ClusterIP
+  selector:
+    app: event-collector
+  ports:
+    - name: websocket
+      port: 8090
+      targetPort: 8090
+      protocol: TCP
+    - name: rest
+      port: 8091
+      targetPort: 8091
+      protocol: TCP

@@ -1,730 +1,512 @@
-# Decoy Deception System
+# Deception System
 
-A Kubernetes-based deception system that automatically detects attacks and routes attackers to isolated decoy environments while keeping legitimate users on production services.
+A Kubernetes-based deception platform that protects a real e-commerce workload by detecting malicious traffic, spawning decoys on demand, and redirecting attackers away from production services.
 
-## Overview
+## 1. Project Overview
 
-The Decoy Deception System uses behavioral analysis and attack pattern detection to identify malicious traffic. When an attack is detected, the system automatically:
-1. Creates isolated decoy pods that mimic production services
-2. Blocks the attacker's IP at the reverse proxy layer
-3. Routes all subsequent attacker traffic to decoys in round-robin fashion
-4. Collects detailed metrics about attacker behavior
-5. Auto-cleans decoys after a configurable timeout
+This project deploys a full demonstration environment on local Kubernetes (Minikube on Docker Engine by default, or K3s) with four isolated namespaces: a real e-commerce stack, a deception gateway, a decoy pool, and a monitoring layer. All inbound web traffic enters through a single intelligent traffic router, which can evaluate each request before deciding whether to send it to real services or into a controlled honeypot path.
 
-## Architecture
+The security path is event-driven. The `traffic-router` mirrors request metadata to the `traffic-analyzer`, which applies pattern and behavior rules (SQL injection, XSS, traversal, brute-force, reconnaissance, and directory enumeration). Confirmed detections are published through Redis, where the `deception-controller` consumes them, creates decoy resources, and emits routing updates used by the router.
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                          External Traffic                            │
-└────────────────────────────────┬────────────────────────────────────┘
-                                 │
-                    ┌────────────▼────────────┐
-                    │   Manager (NodePort)    │
-                    │   Reverse Proxy         │
-                    │   IP Blocking           │
-                    └────┬───────────────┬────┘
-                         │               │
-              Legitimate │               │ Blocked IPs
-                         │               │
-                    ┌────▼─────┐    ┌────▼──────────────┐
-                    │Frontend  │    │  Decoy Pods (3)   │
-                    │  API     │    │  - exact          │
-                    │          │    │  - slow (1000ms)  │
-                    └────┬─────┘    │  - logger         │
-                         │          └───────────────────┘
-                    ┌────▼─────┐
-                    │Payment   │
-                    │Service   │
-                    └──────────┘
+The key innovation is **dynamic decoy spawning at a 3:1 ratio per attack event**: each qualifying attacker triggers a decoy set of three pods (frontend, API, database). That gives fast attacker containment without permanently overprovisioning honeypots, while TTL-based cleanup and pod caps keep resource usage stable on low-spec hardware.
 
-┌─────────────────────────────────────────────────────────────────────┐
-│                        Detection & Response                          │
-├─────────────────────────────────────────────────────────────────────┤
-│  ┌──────────┐      ┌────────────┐      ┌──────────┐               │
-│  │ Sentinel │─────▶│ Controller │─────▶│ Manager  │               │
-│  │ (Logs)   │      │ (AppGraph) │      │ (Block)  │               │
-│  └──────────┘      └────────────┘      └──────────┘               │
-│                           │                                         │
-│                    ┌──────▼────────┐                               │
-│                    │   Dashboard   │                               │
-│                    │  (NodePort)   │                               │
-│                    └───────────────┘                               │
-└─────────────────────────────────────────────────────────────────────┘
+## 2. Architecture Diagram
 
-┌─────────────────────────────────────────────────────────────────────┐
-│                        Metrics Collection                            │
-├─────────────────────────────────────────────────────────────────────┤
-│  All Services ──────▶ Reporter (Push-based)                         │
-│                       - 30min rolling history                        │
-│                       - Aggregated stats                             │
-│                       - Per-service breakdown                        │
-└─────────────────────────────────────────────────────────────────────┘
+```text
+                              External Client Traffic
+                                      |
+                                      v
+                        NodePort 30080 (traffic-router)
+                                      |
+                                      v
++-----------------------------------------------------------------------------------+
+| Namespace: deception-gateway (security)                                            |
+|                                                                                   |
+|  +----------------+     POST /analyze      +-------------------+                 |
+|  | traffic-router | ----------------------> | traffic-analyzer  |                 |
+|  | OpenResty+Lua  |                         | Flask rules engine|                 |
+|  +-------+--------+                         +---------+---------+                 |
+|          |                                            |                           |
+|          | allow                                      | publish attack_detected   |
+|          v                                            v                           |
+|  route to real frontend                        Redis pub/sub (monitoring)         |
+|          |                                            |                           |
+|          | receive routing_update                     | consume attack_detected    |
+|          |<-------------------------------------------+                           |
+|  +-------+--------+                                                             |
+|  | deception-     | -- create/delete decoy pods/services --> decoy-pool         |
+|  | controller     | -- publish decoy_spawned + routing_update --> Redis          |
+|  +----------------+                                                             |
++-----------------------------------------------------------------------------------+
+             |                                            |                     |
+             |                                            |                     |
+             v                                            v                     v
++-------------------------------+    +--------------------------------+   +------------------------------+
+| Namespace: ecommerce-real     |    | Namespace: monitoring          |   | Namespace: decoy-pool        |
+|                               |    |                                |   |                              |
+| frontend -> product/cart APIs |    | Redis (event bus)             |   | decoy-fe-<id>                |
+| product/cart -> postgres      |    | event-collector (WS+REST)     |   | decoy-api-<id>               |
+|                               |    | dashboard (NodePort 30088)    |   | decoy-db-<id>                |
++-------------------------------+    +--------------------------------+   +------------------------------+
+
+Data channels:
+- attack_detected, decoy_spawned, decoy_interaction, routing_update, pod_status (Redis)
+- event-collector -> dashboard via WebSocket (:8090) and REST (:8091)
 ```
 
-## Components
+## 3. Prerequisites
 
-### Core Services
+### Platform
+- Windows 10/11 with **WSL2 enabled**
+- Ubuntu 22.04 installed in WSL2
+- Minimum hardware:
+- CPU: Intel i3 (or equivalent)
+- RAM: 4 GB
+- Disk: 20 GB free
 
-**Manager** (NodePort 30000)
-- Reverse proxy entry point for all traffic
-- IP-based routing (legitimate vs blocked)
-- Round-robin load balancing to 3 decoys per blocked IP
-- In-memory IP blocking state
+### Software Requirements
+- `git`
+- `curl`
+- `python3` and `pip`
+- Docker Engine running inside WSL (`docker.service`)
+- `kubectl`
+- Minikube (`--driver=docker`) or K3s
+- Bash shell (default in Ubuntu)
 
-**Frontend-API** (Port 8080)
-- Legitimate e-commerce API
-- Endpoints: products, cart, login, checkout
-- JSON structured logging
-- Async metrics reporting
-
-**Payment-Service** (Port 8081)
-- Payment processing service
-- Transaction ID generation
-- Called by frontend-api
-
-### Detection & Response
-
-**Sentinel** (Attack Detection)
-- Monitors pod logs via Kubernetes SharedInformer
-- Detects 4 attack types:
-  - SQL Injection (critical severity)
-  - Path Traversal (high severity)
-  - Rate Limiting >50 req/min (medium severity)
-  - Auth Brute Force >3 failures/min (high severity)
-- 5-minute alert cooldown per IP
-- Sends alerts to Controller
-
-**Controller** (Orchestration)
-- Kubernetes operator with AppGraph CRD
-- Creates 3 decoy pods on alert:
-  - **exact**: Identical to production
-  - **slow**: 1000ms artificial latency
-  - **logger**: Verbose request/response logging
-- NetworkPolicy isolation per decoy
-- Auto-cleanup after 15 minutes
-- Real-time dashboard on NodePort 30090
-
-**Reporter** (Metrics)
-- Push-based metrics collection
-- Rolling 30-minute history
-- Aggregated statistics
-- Per-service breakdown
-- Lightweight client library
-
-### Infrastructure
-
-**AppGraph CRD**
-- Custom Resource for decoy orchestration
-- Spec: decoyCount, autoCleanupMinutes
-- Status: decoyStatus, cleanupScheduledAt
-
-**NetworkPolicies**
-- Ingress: Allow from Manager only
-- Egress: Allow to Reporter and DNS
-- Blocks all other traffic
-
-## Quick Start
-
-### Prerequisites
-
-- WSL (Windows Subsystem for Linux)
-- Go 1.21+
-- Docker
-- 2.5GB RAM minimum
-
-### 1. Install k3s
-
+### Docker Engine in WSL (after Docker Desktop uninstall)
 ```bash
-make setup    # Install k3s (~2 min)
-make verify   # Verify installation
-```
+# 1) verify Docker Engine service
+sudo systemctl status docker --no-pager
 
-Expected output:
+# 2) ensure your user can use docker
+sudo usermod -aG docker $USER
+newgrp docker
+docker info
 ```
-✓ k3s is running
-Node: ready
-k3s memory usage: ~800MB
-```
+If `docker info` still shows `permission denied` on `/var/run/docker.sock`, open a new WSL terminal and rerun.
 
-### 2. Build and Deploy
-
+### Quick Host Checks
 ```bash
-make build    # Build Docker images (~2-3 min)
-make deploy   # Deploy to k3s (~2-3 min)
-```
-
-Expected output:
-```
-========================================
-       Deployment Complete! ✓
-========================================
-
-Service Endpoints:
-  Manager (Entry Point):  http://172.20.0.2:30000
-  Controller Dashboard:   http://172.20.0.2:30090
-```
-
-### 3. Verify Deployment
-
-```bash
-kubectl get pods
-```
-
-Expected output (all Running):
-```
-NAME                           READY   STATUS    RESTARTS   AGE
-reporter-xxx                   1/1     Running   0          1m
-payment-svc-xxx                1/1     Running   0          1m
-frontend-api-xxx               1/1     Running   0          1m
-manager-xxx                    1/1     Running   0          1m
-sentinel-xxx                   1/1     Running   0          1m
-controller-xxx                 1/1     Running   0          1m
-```
-
-### 4. Open Dashboard
-
-```bash
-make dashboard
-```
-
-The dashboard will open at `http://NODE_IP:30090` showing:
-- Real-time topology graph
-- Metrics panel
-- Event timeline
-
-## Demo: Attack Detection
-
-### Step 1: Baseline Normal Traffic
-
-```bash
-make test-normal
-```
-
-**Expected Behavior:**
-- 20 requests over 60 seconds
-- All HTTP 200 responses
-- No alerts from Sentinel
-- Traffic routed to legitimate frontend-api
-
-**Verify Metrics:**
-```bash
-kubectl port-forward svc/reporter 8080:8080 &
-curl http://localhost:8080/api/stats | jq
-```
-
-### Step 2: SQL Injection Attack
-
-```bash
-make test-sqli
-```
-
-**Expected Behavior:**
-1. 30 SQL injection attempts sent (~10 seconds)
-2. Sentinel detects SQLi patterns within 2-3 seconds
-3. Alert sent to Controller with attacker IP
-4. Controller creates AppGraph CR
-5. 3 decoy pods deployed (<2 seconds with stagger)
-6. Manager blocks attacker IP
-7. Subsequent traffic routed to decoys
-
-**Verify Detection:**
-```bash
-# Watch Sentinel logs
-make logs
-
-# Expected log output:
-{
-  "timestamp": "2026-02-04T18:00:00Z",
-  "action": "attack_detected",
-  "attack_type": "sql_injection",
-  "source_ip": "172.20.0.1",
-  "severity": "critical"
-}
-```
-
-**Verify Decoys Created:**
-```bash
-kubectl get pods -l decoy=true
-```
-
-Expected output:
-```
-NAME                      READY   STATUS    RESTARTS   AGE
-decoy-frontend-1-xxx      1/1     Running   0          10s
-decoy-frontend-2-xxx      1/1     Running   0          10s
-decoy-frontend-3-xxx      1/1     Running   0          10s
-```
-
-**Verify AppGraph:**
-```bash
-kubectl get appgraph
-```
-
-Expected output:
-```
-NAME         AGE
-decoy-app    15s
-```
-
-**View Dashboard:**
-```bash
-make dashboard
-```
-
-Expected visualization:
-- Manager node (blue) in center
-- 3 Decoy nodes (orange) connected to Manager
-- Frontend-API node (green) connected to Manager
-- Event timeline showing "AppGraph Created", "Pod Created" events
-
-### Step 3: Rate Limit Attack
-
-```bash
-make test-rate
-```
-
-**Expected Behavior:**
-1. 70 requests in 5 seconds (~1200 req/min)
-2. Sentinel detects rate limit exceeded (threshold: 50 req/min)
-3. Another AppGraph created (or existing one reused)
-4. IP blocked and routed to decoys
-
-**Verify Rate Detection:**
-```bash
-kubectl logs -l app=sentinel | grep rate_limit_exceeded
-```
-
-Expected log:
-```json
-{
-  "attack_type": "rate_limit_exceeded",
-  "source_ip": "172.20.0.1",
-  "severity": "medium",
-  "evidence": "70 requests in 1 minute (threshold: 50)"
-}
-```
-
-### Step 4: Monitor Metrics
-
-**Reporter Stats:**
-```bash
-kubectl port-forward svc/reporter 8080:8080 &
-curl http://localhost:8080/api/stats | jq
-```
-
-Expected output:
-```json
-{
-  "total_requests": 120,
-  "requests_by_service": {
-    "frontend-api": 20,
-    "decoy-frontend-1": 33,
-    "decoy-frontend-2": 34,
-    "decoy-frontend-3": 33
-  },
-  "unique_ips": 1,
-  "average_latency_ms": 520.5
-}
-```
-
-**Per-Service Breakdown:**
-```bash
-curl http://localhost:8080/api/services | jq
-```
-
-Expected output:
-```json
-{
-  "frontend-api": {
-    "total_requests": 20,
-    "avg_latency": 45.2
-  },
-  "decoy-frontend-1": {
-    "total_requests": 33,
-    "avg_latency": 48.5
-  },
-  "decoy-frontend-2": {
-    "total_requests": 34,
-    "avg_latency": 1050.3
-  },
-  "decoy-frontend-3": {
-    "total_requests": 33,
-    "avg_latency": 52.1
-  }
-}
-```
-
-Note: decoy-frontend-2 (slow type) shows ~1000ms higher latency.
-
-### Step 5: Auto-Cleanup
-
-Wait 15 minutes, then verify auto-cleanup:
-
-```bash
-kubectl get appgraph
-# Expected: No resources found (auto-deleted after 15 min)
-
-kubectl get pods -l decoy=true
-# Expected: No resources found (cascade deleted)
-```
-
-## Configuration
-
-### Sentinel Detection Thresholds
-
-Edit `deploy/k8s/sentinel-configmap.yaml`:
-
-```yaml
-data:
-  rate_limit_threshold: "50"        # Requests per minute
-  rate_limit_window: "1m"           # Time window
-  auth_failure_limit: "3"           # Failed auth attempts
-  auth_failure_window: "1m"         # Time window
-  cooldown_period: "5m"             # Alert cooldown per IP
-```
-
-### Decoy Auto-Cleanup
-
-Edit AppGraph CR or Controller default:
-
-```yaml
-spec:
-  autoCleanupMinutes: 15  # Default: 15 minutes
-```
-
-### Reporter History Window
-
-Edit `deploy/k8s/reporter.yaml`:
-
-```yaml
-env:
-- name: HISTORY_DURATION
-  value: "30m"           # Default: 30 minutes
-- name: CLEANUP_INTERVAL
-  value: "5m"            # Default: 5 minutes
-```
-
-### Decoy Behavior
-
-Decoys are configured via environment variables in Controller code:
-
-- **exact**: Normal behavior, indistinguishable from production
-- **slow**: DECOY_LATENCY=1000 (1000ms artificial delay)
-- **logger**: DECOY_LOGGING=verbose (detailed request/response logs)
-
-## Troubleshooting
-
-### Issue: Pods Not Starting (ErrImagePull)
-
-**Symptom:**
-```bash
-kubectl get pods
-# STATUS: ErrImagePull or ImagePullBackOff
-```
-
-**Cause:** Images not imported into k3s containerd store (WSL requirement)
-
-**Solution:**
-```bash
-# Verify images in k3s
-sudo k3s ctr images ls | grep -E 'frontend-api|manager|sentinel'
-
-# Re-run deployment (includes image import)
-make deploy
-```
-
-### Issue: Attacks Not Detected
-
-**Symptom:** No alerts after running `make test-sqli`
-
-**Diagnosis:**
-```bash
-# Check Sentinel is running
-kubectl get pods -l app=sentinel
-
-# View Sentinel logs
-kubectl logs -l app=sentinel -f
-
-# Verify ConfigMap
-kubectl get configmap sentinel-config -o yaml
-```
-
-**Common Causes:**
-- Sentinel not running
-- ConfigMap missing or incorrect
-- Services not producing JSON logs
-- Source IP extraction failing
-
-**Solution:**
-```bash
-# Restart Sentinel
-kubectl delete pod -l app=sentinel
-
-# Verify log format from frontend-api
-kubectl logs -l app=frontend-api | head -5
-
-# Should see JSON logs like:
-{"timestamp":"...","method":"GET","path":"/api/products","source_ip":"..."}
-```
-
-### Issue: Decoys Not Created
-
-**Symptom:** Alert sent but no decoy pods
-
-**Diagnosis:**
-```bash
-# Check Controller logs
-kubectl logs -l app=controller
-
-# Check AppGraph status
-kubectl get appgraph -o yaml
-
-# Check RBAC permissions
-kubectl auth can-i create pods --as=system:serviceaccount:default:controller
-```
-
-**Common Causes:**
-- Controller not running
-- RBAC permissions missing
-- AppGraph CRD not installed
-- Resource limits preventing pod creation
-
-**Solution:**
-```bash
-# Verify Controller RBAC
-kubectl get clusterrole controller-role -o yaml
-
-# Verify AppGraph CRD
-kubectl get crd appgraphs.deception.demo
-
-# Check Controller events
-kubectl describe pod -l app=controller
-```
-
-### Issue: Dashboard Not Accessible
-
-**Symptom:** Cannot access http://NODE_IP:30090
-
-**Diagnosis:**
-```bash
-# Get node IP
-kubectl get nodes -o wide
-
-# Check Controller service
-kubectl get svc controller
-
-# Check Controller pod
-kubectl get pods -l app=controller
-kubectl logs -l app=controller
-```
-
-**Solution:**
-```bash
-# Port-forward as fallback
-kubectl port-forward svc/controller 8090:8080
-
-# Access at http://localhost:8090
-
-# Or verify NodePort
-kubectl get svc controller -o yaml | grep nodePort
-# Should show: nodePort: 30090
-```
-
-### Issue: High Memory Usage
-
-**Symptom:** k3s or pods using excessive memory
-
-**Diagnosis:**
-```bash
-# Check overall memory
+# inside WSL
+uname -a
 free -h
-
-# Check k3s memory
-ps aux | grep k3s | awk '{sum+=$6} END {print sum/1024 " MB"}'
-
-# Check pod memory
-kubectl top pods
+df -h
+kubectl version --client
+docker --version
+docker info --format '{{.ServerVersion}} {{.OperatingSystem}} {{.Driver}}'
+python3 --version
 ```
 
-**Common Causes:**
-- Too many decoy AppGraphs active
-- Reporter history window too large
-- Memory leaks in services
+## 4. Quick Start
 
-**Solution:**
+1. **Enable WSL2 and install Ubuntu 22.04**
+```powershell
+# PowerShell (Admin)
+wsl --install -d Ubuntu-22.04
+# reboot if prompted
+```
+
+2. **Clone this repo**
 ```bash
-# Delete old AppGraphs
-kubectl delete appgraph --all
-
-# Reduce Reporter history
-# Edit deploy/k8s/reporter.yaml
-# HISTORY_DURATION: "15m"  # Instead of 30m
-
-# Restart high-memory pod
-kubectl delete pod <pod-name>
+git clone <your-repo-url>
+cd deception-system
 ```
 
-### Issue: Round-Robin Not Working
-
-**Symptom:** Attacker always routed to same decoy
-
-**Diagnosis:**
+3. **Run setup script**
 ```bash
-# Check Manager logs
-kubectl logs -l app=manager | grep route_to_decoy
-
-# Should see different decoy URLs:
-{"action":"route_to_decoy","selected_url":"http://decoy-frontend-1:8080",...}
-{"action":"route_to_decoy","selected_url":"http://decoy-frontend-2:8080",...}
-{"action":"route_to_decoy","selected_url":"http://decoy-frontend-3:8080",...}
+# setup script for this repo = build + cluster image import
+./build-images.sh
 ```
+`build-images.sh` now auto-detects `docker` vs `sudo docker` and imports to Minikube/K3s based on current context.
 
-**Solution:**
+4. **Run deploy script**
 ```bash
-# Verify 3 decoy URLs in Manager state
-kubectl logs -l app=manager | grep block_ip
-
-# Should see:
-{"action":"block_ip","decoy_urls":["http://decoy-frontend-1:8080",...]}
-
-# Restart Manager if needed
-kubectl delete pod -l app=manager
+# skip rebuild because setup already built images
+./deploy.sh --skip-build
 ```
 
-## Performance Benchmarks
-
-Based on testing with k3s on WSL:
-
-| Metric | Value |
-|--------|-------|
-| **Deployment** | |
-| Total deployment time | 4-5 minutes |
-| Image build time | 2-3 minutes |
-| Pod startup time | 30-60 seconds |
-| **Detection** | |
-| SQLi detection latency | 2-3 seconds |
-| Rate limit detection | 1-2 seconds |
-| Alert to decoy deployment | <2 seconds |
-| **Resource Usage** | |
-| k3s base memory | ~800MB |
-| Total system memory | ~1.34GB |
-| Total CPU allocation | 380m |
-| **Decoy Operations** | |
-| Decoy creation time | <2 seconds (3 pods) |
-| Auto-cleanup delay | 15 minutes |
-| **Metrics** | |
-| Metric ingestion latency | <1ms |
-| Stats aggregation (10k metrics) | ~5ms |
-
-## Resource Allocation
-
-| Component | Memory | CPU | QoS | Phase |
-|-----------|--------|-----|-----|-------|
-| k3s | ~800Mi | N/A | - | 1 |
-| frontend-api | 80Mi | 50m | Guaranteed | 2 |
-| payment-svc | 40Mi | 30m | Guaranteed | 2 |
-| manager | 60Mi | 50m | Guaranteed | 3 |
-| sentinel | 80Mi | 50m | Guaranteed | 4 |
-| controller | 100Mi | 100m | Guaranteed | 5 |
-| reporter | 60Mi | 40m | Guaranteed | 6 |
-| decoy-1 | 40Mi | 20m | Guaranteed | 5 |
-| decoy-2 | 40Mi | 20m | Guaranteed | 5 |
-| decoy-3 | 40Mi | 20m | Guaranteed | 5 |
-| **Total** | **~1.34GB** | **380m** | - | - |
-
-**Headroom:** 1.16GB remaining (within 2.5GB budget)
-
-## Makefile Reference
-
-### Setup
+5. **Open dashboard**
+- If context is `minikube`, first get node IP:
 ```bash
-make check         # Check dependencies
-make setup         # Install k3s
-make verify        # Verify installation
-make clean         # Uninstall k3s
+NODE_IP=$(kubectl get node minikube -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')
+echo "$NODE_IP"
 ```
+- Dashboard: `http://<NODE_IP>:30088` (or `http://localhost:30088` on K3s)
+- Protected e-commerce entrypoint: `http://<NODE_IP>:30080` (or `http://localhost:30080` on K3s)
 
-### Deployment
+6. **Run attack simulator**
 ```bash
-make build         # Build Docker images
-make deploy        # Deploy all services
-make clean-deploy  # Remove deployments
-make clean-images  # Remove Docker images
+python3 -m pip install -r 07-attack-simulator/requirements.txt
+python3 07-attack-simulator/simulate_attacks.py --target http://<NODE_IP>:30080 --attack-type all
 ```
 
-### Testing
+If `python3 -m pip` is missing:
 ```bash
-make test          # Run all tests
-make test-normal   # Normal traffic
-make test-sqli     # SQL injection attack
-make test-rate     # Rate limit attack
+sudo apt-get update
+sudo apt-get install -y python3-pip
 ```
 
-### Monitoring
+## 5. Detailed Component Guide
+
+### 5.1 Namespaces and Policies
+- Purpose: isolation between real services, security logic, decoys, and observability.
+- How it works: four namespaces (`ecommerce-real`, `deception-gateway`, `decoy-pool`, `monitoring`) plus network policies enforcing segmentation.
+- Key config:
+- `01-namespaces/namespaces.yaml`
+- `01-namespaces/network-policies.yaml`
+- `01-namespaces/resource-quotas.yaml`
+- Critical rule: `decoy-pool` cannot egress to `ecommerce-real`.
+
+### 5.2 Traffic Router (`traffic-router`)
+- Purpose: single ingress and decision point for all HTTP requests.
+- How it works: OpenResty/Lua rate-limits (`30 req/s/IP`), checks attacker route cache, calls analyzer for unknown IPs, proxies to real frontend or decoy frontend.
+- Key config:
+- `03-deception-engine/traffic-router/nginx.conf`
+- `03-deception-engine/traffic-router/entrypoint.sh`
+- Service exposure: NodePort `30080`.
+- Internal debug APIs: `/internal/add-route`, `/internal/remove-route`, `/internal/routes`, `/nginx-health`.
+
+### 5.3 Traffic Analyzer (`traffic-analyzer`)
+- Purpose: classify mirrored requests as malicious or benign.
+- How it works: Flask API endpoint `POST /analyze` runs `AttackDetector`, filters findings by confidence threshold, publishes `attack_detected` events to Redis.
+- Key config:
+- `CONFIDENCE_THRESHOLD` (default `0.6`)
+- `REDIS_URL`
+- `PORT` (default `8085`)
+- Files:
+- `03-deception-engine/traffic-analyzer/analyzer.py`
+- `03-deception-engine/traffic-analyzer/attack_patterns.py`
+
+### 5.4 Deception Controller (`deception-controller`)
+- Purpose: orchestrate decoy lifecycle and attacker routing.
+- How it works: subscribes to `attack_detected`, creates decoy set resources (3 pods + 3 services), publishes `decoy_spawned` and `routing_update`, deletes expired sets every 60s.
+- Key config:
+- `MAX_DECOY_PODS=15`, `MAX_DECOY_SETS=5`
+- TTL annotation default: `10` minutes
+- Eviction policy: if near cap, evict oldest set before spawning new set
+- Files:
+- `03-deception-engine/deception-controller/controller.py`
+- `03-deception-engine/deception-controller/decoy_templates.py`
+
+### 5.5 Decoy Templates (`decoy-pool`)
+- Purpose: provide believable but isolated targets.
+- How it works: each attack event gets three decoy pods (frontend/API/DB) with labels and annotations for routing, attribution, and cleanup.
+- Key config:
+- Resource profile per decoy type in `decoy_templates.py`
+- Labels: `role=decoy`, `attack-id`, `attacker-ip`, `decoy-type`
+- Services are ClusterIP for stable DNS routing.
+
+### 5.6 Real E-commerce Stack (`ecommerce-real`)
+- Purpose: legitimate application the system protects.
+- How it works:
+- `frontend` serves UI and proxies API calls
+- `product-service` and `cart-service` provide Flask APIs
+- `postgres` stores product/cart data
+- Key config files:
+- `02-ecommerce-real/frontend/deployment.yaml`
+- `02-ecommerce-real/product-service/deployment.yaml`
+- `02-ecommerce-real/cart-service/deployment.yaml`
+- `02-ecommerce-real/postgres/deployment.yaml`
+
+### 5.7 Redis Event Bus (`monitoring/redis`)
+- Purpose: central pub/sub backbone.
+- How it works: components publish and subscribe across channels (`attack_detected`, `routing_update`, `decoy_spawned`, etc.).
+- Key config:
+- Max memory `48MB`, no persistence, pub/sub buffer limits
+- File: `05-monitoring/redis/deployment.yaml`
+
+### 5.8 Event Collector (`monitoring/event-collector`)
+- Purpose: aggregate Redis and Kubernetes events for visualization.
+- How it works: subscribes to Redis, watches pod events via Kubernetes API, builds topology snapshots every 5s, pushes to clients via WebSocket.
+- Key config:
+- `WEBSOCKET_PORT=8090`
+- `REST_PORT=8091`
+- `GRAPH_INTERVAL_SECONDS=5`
+- `MONITORED_NAMESPACES=ecommerce-real,deception-gateway,decoy-pool,monitoring`
+- File: `05-monitoring/event-collector/collector.py`
+
+### 5.9 Dashboard (`monitoring/dashboard`)
+- Purpose: live threat operations UI.
+- How it works: frontend JS consumes snapshots + events, renders force-directed graph, overlays attack and redirect edges, and updates event feed/stats.
+- Key config:
+- `EVENT_COLLECTOR_WS`
+- `EVENT_COLLECTOR_API`
+- NodePort `30088`
+- Files:
+- `05-monitoring/dashboard/server.js`
+- `05-monitoring/dashboard/public/graph.js`
+
+### 5.10 Attack Simulator (`07-attack-simulator`)
+- Purpose: reproducible demo traffic (normal + malicious).
+- How it works: sends requests with specific attacker IP headers (`X-Forwarded-For`) for SQLi, XSS, traversal, brute-force, and recon scenarios.
+- Key config:
+- `--target` (default `http://localhost:30080`)
+- `--attack-type` (`sqli|xss|traversal|bruteforce|recon|legitimate|all`)
+- `--delay` between waves
+- Files:
+- `07-attack-simulator/simulate_attacks.py`
+- `07-attack-simulator/demo-scenario.sh`
+
+## 6. Attack Detection Rules
+
+Detection threshold: findings with confidence **`> 0.6`** trigger deception action.
+
+| Attack Type | Detection Method | Confidence Scoring | System Response |
+|---|---|---|---|
+| SQL Injection (`sqli`) | Regex signatures over path/query/body/headers (`OR 1=1`, `UNION SELECT`, `DROP`, `SLEEP`, comment evasion, etc.) | Fixed per matched pattern (approx `0.55` to `0.95`) | Publish `attack_detected` -> spawn 3 decoys -> add attacker IP route to decoy frontend |
+| XSS (`xss`) | Regex signatures (`<script>`, `javascript:`, event handlers, `eval`, `data:text/html`, etc.) | Fixed per pattern (approx `0.70` to `0.95`) | Same as above |
+| Path Traversal (`path_traversal`) | Regex for traversal and sensitive-file probes (`../`, `%2e%2e`, `/etc/passwd`, `windows/system32`, etc.) | Fixed per pattern (approx `0.85` to `0.95`) | Same as above |
+| Brute Force (`brute_force`) | Stateful rate detection on auth-like POST endpoints (`/login`, `/auth`, checkout/login paths) | `0.60 + 0.08 * (attempts - threshold)` capped at `0.98` (threshold default 5 attempts / 30s) | Same as above |
+| Recon Scanner (`recon_scanner`) | Known scanner User-Agent detection (`sqlmap`, `nikto`, `nmap`, etc.) | Fixed per scanner signature (approx `0.80` to `0.95`) | Same as above |
+| Recon Scanning (`recon_scanning`) | Unique path enumeration rate per IP within scan window | `0.65 + 0.05 * (unique_paths - threshold)` capped at `0.98` (default threshold 10 paths / 15s) | Same as above |
+| Directory Enumeration (`dir_enum`) | Sensitive/admin endpoint probes (`/admin`, `/.git`, `/wp-login`, `/phpmyadmin`, etc.) | Fixed per path class (approx `0.30` to `0.90`) | Same as above |
+
+## 7. Dashboard Guide
+
+### Visual Node Colors
+- **Green nodes** = real services/pods (production app path)
+- **Red nodes** = decoys (honeypots in `decoy-pool`)
+- **Yellow/orange nodes** = detected attackers (external attacker entities)
+- Blue diamond nodes represent gateway/security components.
+- Gray nodes represent monitoring services.
+
+### Line Colors and Meanings
+- **Red lines** = active attack traffic (`attack_traffic`)
+- **Yellow/orange lines** = redirected attacker traffic to decoys (`redirected_traffic`)
+- **Green lines** = legitimate service dependencies/traffic (`legitimate_traffic`)
+- **Gray lines** = service mesh/internal selector links (`internal_mesh`)
+
+### How to Read the Event Feed
+- Each row is timestamped and categorized:
+- Attack events (`ATTACK ...`) highlight detection type/IP/confidence.
+- Decoy spawn events (`DECOY SPAWN ...`) show attack ID, attacker IP, and number of decoy pods.
+- Routing events (`ROUTING add_route/remove_route ...`) indicate redirection rule changes.
+- Pod lifecycle events (`POD ADDED/MODIFIED/DELETED ...`) show live infrastructure transitions.
+- During a demo, correlate event feed time with node/edge changes to narrate cause -> action -> containment.
+
+## 8. Demo Script
+
+Target duration: ~3 minutes.
+
+### 0:00 - 0:20 (Baseline)
+- "Open two browser tabs: one for the e-commerce store (port 30080), one for the dashboard (port 30088)"
+- "In a terminal, first show normal traffic flowing..."
 ```bash
-make dashboard     # Open dashboard
-make logs          # Tail Sentinel logs
+python3 07-attack-simulator/simulate_attacks.py --target http://localhost:30080 --attack-type legitimate --continuous
+```
+- Narration: graph shows stable green production path and normal event cadence.
+
+### 0:20 - 0:50 (SQL Injection wave)
+- "Now launch the SQL injection attack and narrate what you see..."
+```bash
+python3 07-attack-simulator/simulate_attacks.py --target http://localhost:30080 --attack-type sqli
+```
+- Narration: attack event appears, attacker node becomes active, route updates follow.
+- "Point out on the dashboard: the new red decoy nodes appearing..."
+
+### 0:50 - 1:40 (Additional attack waves)
+- Run XSS, recon, brute-force, traversal in sequence.
+```bash
+python3 07-attack-simulator/simulate_attacks.py --target http://localhost:30080 --attack-type xss
+python3 07-attack-simulator/simulate_attacks.py --target http://localhost:30080 --attack-type recon
+python3 07-attack-simulator/simulate_attacks.py --target http://localhost:30080 --attack-type bruteforce
+python3 07-attack-simulator/simulate_attacks.py --target http://localhost:30080 --attack-type traversal
+```
+- Narration: emphasize repeated 3-pod decoy spawning behavior per qualifying attacker.
+
+### 1:40 - 2:40 (Containment proof)
+- Explain that subsequent requests from flagged IPs are redirected to decoys.
+- Show `ROUTING add_route` events and redirected (yellow/orange) edges on graph.
+- Optionally inspect router route table:
+```bash
+curl -s http://localhost:30080/internal/routes | python3 -m json.tool
 ```
 
-## Security Considerations
+### 2:40 - 3:00 (Cleanup behavior)
+- Explain TTL cleanup cycle and finite decoy capacity.
+- Mention controller sweep interval (60s) and default decoy TTL (10 minutes).
+- End with dashboard counters for attacks, spawned decoys, cleaned decoys, and active sets.
 
-### Production Deployment
+For an automated narration flow, use:
+```bash
+./07-attack-simulator/demo-scenario.sh http://localhost:30080
+```
 
-**Authentication:**
-- Add authentication to Controller dashboard (OAuth2, JWT)
-- Secure Manager API endpoints (/api/block_ip, /api/cleanup)
-- Enable mutual TLS between services
+## 9. Troubleshooting
 
-**Network Policies:**
-- Current NetworkPolicies require CNI plugin support (Calico, Cilium)
-- k3s default (flannel) does not support NetworkPolicy
-- Recommend Canal (Calico + flannel) for production
+### 9.1 WSL2 memory issues
+Symptoms: image builds fail, pods evicted, OOM kills.
 
-**Secrets:**
-- Store sensitive config in Kubernetes Secrets
-- Use RBAC to restrict secret access
-- Rotate credentials regularly
+Check:
+```bash
+free -h
+kubectl top pods -A  # if metrics server installed
+dmesg | tail -100 | rg -i "killed process|oom"
+```
 
-**Resource Limits:**
-- Enforce PodSecurityPolicy or PodSecurity admission
-- Set ResourceQuotas per namespace
-- Monitor resource usage with Prometheus
+Fix (`C:\Users\<you>\.wslconfig` on Windows):
+```ini
+[wsl2]
+memory=6GB
+processors=2
+swap=4GB
+```
+Then apply:
+```powershell
+wsl --shutdown
+```
 
-**Logging:**
-- Ship logs to external system (ELK, Splunk)
-- Encrypt logs at rest
-- Implement log retention policies
+### 9.2 Pods stuck in `Pending` (resource quota exceeded)
+Check:
+```bash
+kubectl describe pod <pod-name> -n <namespace>
+kubectl describe resourcequota -n ecommerce-real
+kubectl describe resourcequota -n decoy-pool
+kubectl describe resourcequota -n monitoring
+```
+Fix:
+- Increase limits in `01-namespaces/resource-quotas.yaml`.
+- Re-apply quotas:
+```bash
+kubectl apply -f 01-namespaces/resource-quotas.yaml
+```
 
-### Attack Surface
+### 9.3 Images not found (cluster image import mismatch)
+Symptoms: `ImagePullBackOff`, `ErrImageNeverPull`.
 
-**Exposed Endpoints:**
-- Manager: NodePort 30000 (public-facing)
-- Controller Dashboard: NodePort 30090 (should be internal only)
+Check:
+```bash
+kubectl describe pod <pod-name> -n <namespace>
+kubectl config current-context
+```
+Fix:
+```bash
+./build-images.sh
+# or build/import a single image
+./build-images.sh --image deception/traffic-router
+```
+If context is `minikube`, verify image exists in minikube runtime:
+```bash
+minikube image ls | rg deception/
+```
+If using K3s, verify in `k3s ctr`:
+```bash
+sudo k3s ctr images list | rg deception/
+```
+If decoy API/DB images are missing, ensure local images `deception/decoy-api:latest` and `deception/decoy-db:latest` exist.
 
-**Mitigations:**
-- Use ingress controller with TLS for Manager
-- Restrict dashboard to internal network
-- Implement rate limiting at ingress level
-- Enable Web Application Firewall (WAF)
+### 9.4 Network policy blocking legitimate traffic
+Check:
+```bash
+./test-connectivity.sh
+kubectl get networkpolicy -A
+kubectl describe networkpolicy decoy-pool-egress-deny-real -n decoy-pool
+```
+Fix:
+- Verify service DNS names and ports in policies.
+- Ensure only intended `decoy-pool -> ecommerce-real` flows are blocked.
+- Re-apply:
+```bash
+kubectl apply -f 01-namespaces/network-policies.yaml
+```
 
-## License
+### 9.5 Dashboard not connecting to WebSocket
+Check:
+```bash
+kubectl get pods -n monitoring
+kubectl logs -n monitoring deploy/event-collector --tail=100
+kubectl logs -n monitoring deploy/dashboard --tail=100
+curl -s http://<NODE_IP>:30088/health
+```
+Fix:
+- Confirm `event-collector` is healthy on ports `8090/8091`.
+- Verify dashboard env values `EVENT_COLLECTOR_WS` and `EVENT_COLLECTOR_API` in `05-monitoring/dashboard/deployment.yaml`.
+- Redeploy monitoring components if needed:
+```bash
+kubectl rollout restart deploy/event-collector -n monitoring
+kubectl rollout restart deploy/dashboard -n monitoring
+```
 
-MIT License - See LICENSE file for details.
+### 9.6 Docker socket permission errors in WSL
+Symptoms: `permission denied while trying to connect to the docker API at unix:///var/run/docker.sock`.
 
-## Contributing
+Check:
+```bash
+id
+ls -l /var/run/docker.sock
+sudo systemctl status docker --no-pager
+```
+Fix:
+```bash
+sudo usermod -aG docker $USER
+newgrp docker
+docker info
+```
+If needed, log out/in to refresh group membership.
 
-Contributions welcome! Please read CONTRIBUTING.md for guidelines.
+## 10. Resource Budget
 
-## Support
+### Per-Pod Resource Plan
 
-- GitHub Issues: https://github.com/DHEERAJGUDALA/decoy-deception-system-kubernetes/issues
-- Documentation: See `scripts/README.md` for detailed deployment guide
+| Pod Type | Namespace | Replicas (baseline/max) | CPU Request | CPU Limit | Memory Request | Memory Limit |
+|---|---|---:|---:|---:|---:|---:|
+| `frontend` | `ecommerce-real` | 1 | 50m | 100m | 32Mi | 64Mi |
+| `product-service` | `ecommerce-real` | 1 | 75m | 150m | 48Mi | 96Mi |
+| `cart-service` | `ecommerce-real` | 1 | 75m | 150m | 48Mi | 96Mi |
+| `postgres` | `ecommerce-real` | 1 | 100m | 200m | 64Mi | 128Mi |
+| `traffic-router` | `deception-gateway` | 1 | 50m | 100m | 32Mi | 64Mi |
+| `traffic-analyzer` | `deception-gateway` | 1 | 75m | 150m | 48Mi | 96Mi |
+| `deception-controller` | `deception-gateway` | 1 | 75m | 150m | 48Mi | 96Mi |
+| `redis` | `monitoring` | 1 | 50m | 100m | 48Mi | 64Mi |
+| `event-collector` | `monitoring` | 1 | 50m | 100m | 48Mi | 96Mi |
+| `dashboard` | `monitoring` | 1 | 25m | 50m | 32Mi | 48Mi |
+| `decoy-fe-*` | `decoy-pool` | 0 to 4 | 25m | 50m | 32Mi | 48Mi |
+| `decoy-api-*` | `decoy-pool` | 0 to 4 | 25m | 50m | 32Mi | 48Mi |
+| `decoy-db-*` | `decoy-pool` | 0 to 4 | 50m | 100m | 48Mi | 64Mi |
+| `attack-simulator` job (optional) | `default` | 0 or 1 | 25m | 100m | 32Mi | 64Mi |
 
-## Acknowledgments
+### Totals
 
-Built with:
-- Kubernetes (k3s)
-- Go 1.21
-- controller-runtime
-- D3.js (dashboard visualization)
-- gorilla/websocket
+| Scenario | CPU Request | CPU Limit | Memory Request | Memory Limit |
+|---|---:|---:|---:|---:|
+| Baseline (no decoys) | 625m | 1250m | 448Mi | 848Mi |
+| One attack event (1 decoy set = 3 pods) | 725m | 1450m | 560Mi | 1008Mi |
+| Max decoy capacity (5 sets = 15 decoy pods) | 1125m | 2250m | 1008Mi | 1648Mi |
+
+## 11. Cleanup
+
+Tear down all deployed resources:
+```bash
+./teardown.sh
+```
+
+Full cleanup (also removes local Docker images and optionally cluster runtime):
+```bash
+./teardown.sh --full
+```
+
+Quick validation after cleanup:
+```bash
+kubectl get ns | rg "ecommerce-real|deception-gateway|decoy-pool|monitoring"
+```
+
+## 12. Future Enhancements
+
+1. ML-assisted anomaly scoring to complement regex/rule-based detection.
+2. Additional decoy service families (SSH, admin panels, fake APIs with deeper interaction scripts).
+3. End-to-end TLS with cert automation and mTLS for internal services.
+4. SIEM/SOAR integration (Splunk, Elastic, Sentinel) for enterprise alert workflows.
+5. Multi-node K3s mode with anti-affinity and HA Redis/event pipeline.
+6. Persistent attack intelligence store for long-term analytics and replay.
+
+---
+
+## Useful Commands
+
+```bash
+./status.sh
+./test-connectivity.sh
+./03-deception-engine/update-route.sh list
+curl -s http://localhost:30080/nginx-health | python3 -m json.tool
+curl -s http://localhost:30088/health | python3 -m json.tool
+```

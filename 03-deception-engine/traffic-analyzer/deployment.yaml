@@ -1,0 +1,97 @@
+# =============================================================================
+# Traffic Analyzer — Deployment + Service
+# =============================================================================
+# Real-time HTTP request analysis service in the deception-gateway namespace.
+# Receives mirrored request metadata, runs attack detection (SQLi, XSS,
+# path traversal, brute force, recon scanning, directory enumeration),
+# and publishes attack events to Redis for the dashboard and controller.
+#
+# Listens on port 8085. Internal only — receives traffic from the
+# traffic-router sidecar, not directly from external clients.
+# =============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: traffic-analyzer
+  namespace: deception-gateway
+  labels:
+    app: traffic-analyzer
+    app.kubernetes.io/part-of: deception-system
+    app.kubernetes.io/component: traffic-analyzer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: traffic-analyzer
+  template:
+    metadata:
+      labels:
+        app: traffic-analyzer
+        app.kubernetes.io/part-of: deception-system
+        app.kubernetes.io/component: traffic-analyzer
+    spec:
+      serviceAccountName: deception-controller
+      containers:
+        - name: traffic-analyzer
+          image: deception/traffic-analyzer:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8085
+              protocol: TCP
+          env:
+            - name: REDIS_URL
+              value: redis://redis.monitoring.svc.cluster.local:6379
+            - name: CONFIDENCE_THRESHOLD
+              value: "0.6"
+            - name: PORT
+              value: "8085"
+          resources:
+            requests:
+              cpu: 75m
+              memory: 48Mi
+            limits:
+              cpu: 150m
+              memory: 96Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8085
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8085
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+---
+# =============================================================================
+# Service — ClusterIP on port 8085
+# =============================================================================
+# Accessible within the cluster at:
+#   traffic-analyzer.deception-gateway.svc.cluster.local:8085
+#
+# Primary consumer: traffic-router (same namespace) forwards mirrored
+# request metadata here via POST /analyze.
+apiVersion: v1
+kind: Service
+metadata:
+  name: traffic-analyzer
+  namespace: deception-gateway
+  labels:
+    app: traffic-analyzer
+    app.kubernetes.io/part-of: deception-system
+    app.kubernetes.io/component: traffic-analyzer
+spec:
+  type: ClusterIP
+  selector:
+    app: traffic-analyzer
+  ports:
+    - port: 8085
+      targetPort: 8085
+      protocol: TCP

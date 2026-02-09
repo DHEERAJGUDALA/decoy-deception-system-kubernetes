@@ -1,0 +1,187 @@
+# ============================================================================
+# Deception System — RBAC (Role-Based Access Control)
+# ============================================================================
+# Two ServiceAccounts with least-privilege access:
+#
+# 1. deception-controller (deception-gateway namespace)
+#    - Full pod/service lifecycle in decoy-pool (create, delete, list, watch)
+#    - Read-only pod listing across all namespaces (for system awareness)
+#    - Create events in all namespaces (for audit logging)
+#
+# 2. event-collector (monitoring namespace)
+#    - Read-only access to pods, services, events across all namespaces
+#    - Used to build the real-time system topology graph
+# ============================================================================
+
+# ───────────────────────────────────────────────────────────────────────────
+# DECEPTION CONTROLLER — ServiceAccount
+# ───────────────────────────────────────────────────────────────────────────
+# Runs in the deception-gateway namespace. This is the operator that
+# dynamically creates and destroys honeypot pods in decoy-pool.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: deception-controller
+  namespace: deception-gateway
+  labels:
+    app.kubernetes.io/part-of: deception-system
+    app.kubernetes.io/component: deception-controller
+---
+
+# ───────────────────────────────────────────────────────────────────────────
+# Role: decoy-manager — scoped to decoy-pool namespace ONLY
+# ───────────────────────────────────────────────────────────────────────────
+# Grants the deception-controller full lifecycle control over pods and
+# services in the decoy-pool namespace. This is the only namespace where
+# it can create/delete resources — following least-privilege principle.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: decoy-manager
+  namespace: decoy-pool
+  labels:
+    app.kubernetes.io/part-of: deception-system
+rules:
+  # Pod lifecycle: spawn decoy pods on attack detection, garbage-collect expired ones
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "delete", "list", "watch", "get"]
+  # Service lifecycle: create/delete the decoy-service ClusterIP for load balancing
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["create", "delete", "list", "get"]
+---
+
+# ───────────────────────────────────────────────────────────────────────────
+# RoleBinding: bind decoy-manager role to deception-controller SA
+# ───────────────────────────────────────────────────────────────────────────
+# This binding is namespace-scoped to decoy-pool, ensuring the controller
+# can ONLY manage resources in the honeypot namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: deception-controller-decoy-binding
+  namespace: decoy-pool
+  labels:
+    app.kubernetes.io/part-of: deception-system
+subjects:
+  - kind: ServiceAccount
+    name: deception-controller
+    namespace: deception-gateway
+roleRef:
+  kind: Role
+  name: decoy-manager
+  apiGroup: rbac.authorization.k8s.io
+---
+
+# ───────────────────────────────────────────────────────────────────────────
+# ClusterRole: cluster-pod-reader — read-only pod access across all namespaces
+# ───────────────────────────────────────────────────────────────────────────
+# The deception-controller needs cluster-wide pod visibility for:
+#   - Monitoring the health of real services before routing traffic
+#   - Counting total decoy pods across all attack events
+#   - Creating Kubernetes events for audit trails
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: deception-controller-cluster-reader
+  labels:
+    app.kubernetes.io/part-of: deception-system
+rules:
+  # Read-only pod access: used for system-wide pod monitoring and counting
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  # Event creation: the controller logs attack events and decoy lifecycle
+  # events for audit and debugging purposes
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create"]
+---
+
+# ───────────────────────────────────────────────────────────────────────────
+# ClusterRoleBinding: bind cluster reader to deception-controller SA
+# ───────────────────────────────────────────────────────────────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: deception-controller-cluster-reader-binding
+  labels:
+    app.kubernetes.io/part-of: deception-system
+subjects:
+  - kind: ServiceAccount
+    name: deception-controller
+    namespace: deception-gateway
+roleRef:
+  kind: ClusterRole
+  name: deception-controller-cluster-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+
+# ═══════════════════════════════════════════════════════════════════════════
+# EVENT COLLECTOR (Monitoring) — Read-Only Observer
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ───────────────────────────────────────────────────────────────────────────
+# ServiceAccount for the event-collector in the monitoring namespace
+# ───────────────────────────────────────────────────────────────────────────
+# The event-collector aggregates data from all namespaces to build the
+# real-time topology graph on the D3.js dashboard. It needs read-only
+# access to pods, services, and events — never write access.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: event-collector
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: deception-system
+    app.kubernetes.io/component: event-collector
+---
+
+# ───────────────────────────────────────────────────────────────────────────
+# ClusterRole: cluster-observer — read-only access to system topology
+# ───────────────────────────────────────────────────────────────────────────
+# Grants list/watch on pods, services, and events across all namespaces.
+# This is strictly read-only — the event-collector never modifies resources.
+# Used to:
+#   - Discover all pods (real + decoy) for the force-directed graph
+#   - Track service endpoints for edge rendering
+#   - Watch events for the real-time event log panel
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: monitoring-cluster-observer
+  labels:
+    app.kubernetes.io/part-of: deception-system
+rules:
+  # Pod observation: enumerate all pods to render graph nodes
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list", "watch", "get"]
+  # Service observation: discover service endpoints for graph edges
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["list", "watch", "get"]
+  # Event observation: stream Kubernetes events for the event log panel
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list", "watch", "get"]
+---
+
+# ───────────────────────────────────────────────────────────────────────────
+# ClusterRoleBinding: bind observer role to event-collector SA
+# ───────────────────────────────────────────────────────────────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: event-collector-observer-binding
+  labels:
+    app.kubernetes.io/part-of: deception-system
+subjects:
+  - kind: ServiceAccount
+    name: event-collector
+    namespace: monitoring
+roleRef:
+  kind: ClusterRole
+  name: monitoring-cluster-observer
+  apiGroup: rbac.authorization.k8s.io

@@ -1,0 +1,159 @@
+# ============================================================================
+# PostgreSQL — Deployment, Service, Secret, PVC
+# ============================================================================
+# Single-replica Postgres for the real e-commerce app. Tuned for minimal
+# resource usage on an i3 PC (2 cores, 4GB RAM).
+# ============================================================================
+
+# ---------------------------------------------------------------------------
+# Secret: database credentials (base64-encoded)
+# ---------------------------------------------------------------------------
+# POSTGRES_PASSWORD = "d3c0y-Tr4p-2024" → base64: ZDNjMHktVHI0cC0yMDI0
+# In production, use sealed-secrets or external secret management.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-credentials
+  namespace: ecommerce-real
+  labels:
+    app.kubernetes.io/part-of: deception-system
+    app.kubernetes.io/component: postgres
+type: Opaque
+data:
+  POSTGRES_PASSWORD: ZDNjMHktVHI0cC0yMDI0
+---
+
+# ---------------------------------------------------------------------------
+# PersistentVolumeClaim: 256Mi using K3s default local-path provisioner
+# ---------------------------------------------------------------------------
+# Minimal storage — this is a demo with 12 seed products and ephemeral carts.
+# local-path is K3s's built-in storage class (no external provisioner needed).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data-pvc
+  namespace: ecommerce-real
+  labels:
+    app.kubernetes.io/part-of: deception-system
+    app.kubernetes.io/component: postgres
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 256Mi
+---
+
+# ---------------------------------------------------------------------------
+# Deployment: single-replica PostgreSQL
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: ecommerce-real
+  labels:
+    app.kubernetes.io/part-of: deception-system
+    app.kubernetes.io/component: postgres
+spec:
+  replicas: 1
+  strategy:
+    # Recreate strategy — only one postgres instance can mount the PVC at a time
+    type: Recreate
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+        app.kubernetes.io/part-of: deception-system
+        app.kubernetes.io/component: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: deception/postgres:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 5432
+              protocol: TCP
+          env:
+            # Database name created on first start
+            - name: POSTGRES_DB
+              value: ecommerce
+            # Application user (not superuser in production, fine for demo)
+            - name: POSTGRES_USER
+              value: appuser
+            # Password from Secret — never hardcoded in Deployment spec
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_PASSWORD
+            # Enable data checksums for integrity verification
+            - name: POSTGRES_INITDB_ARGS
+              value: "--data-checksums"
+          # Tune PostgreSQL for low memory — defaults are too aggressive for 128Mi limit
+          args:
+            - "-c"
+            - "shared_buffers=32MB"
+            - "-c"
+            - "work_mem=2MB"
+            - "-c"
+            - "max_connections=20"
+            - "-c"
+            - "effective_cache_size=64MB"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          # Liveness: TCP check ensures postgres process is listening
+          livenessProbe:
+            tcpSocket:
+              port: 5432
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # Readiness: same TCP check but faster cadence for startup
+          readinessProbe:
+            tcpSocket:
+              port: 5432
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+              # subPath avoids lost+found conflict with the PVC root
+              subPath: pgdata
+      volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: postgres-data-pvc
+---
+
+# ---------------------------------------------------------------------------
+# Service: ClusterIP only — no external exposure
+# ---------------------------------------------------------------------------
+# Only accessible within the cluster. Other services connect via:
+#   postgres.ecommerce-real.svc.cluster.local:5432
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: ecommerce-real
+  labels:
+    app.kubernetes.io/part-of: deception-system
+    app.kubernetes.io/component: postgres
+spec:
+  type: ClusterIP
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+      protocol: TCP

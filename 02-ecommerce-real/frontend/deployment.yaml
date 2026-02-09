@@ -1,0 +1,90 @@
+# =============================================================================
+# Frontend — Deployment + Service
+# =============================================================================
+# Single-replica Node.js Express server serving the e-commerce SPA and
+# proxying API requests to product-service and cart-service.
+# Tuned for minimal resource usage on an i3 PC.
+# =============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: ecommerce-real
+  labels:
+    app: frontend
+    app.kubernetes.io/part-of: deception-system
+    app.kubernetes.io/component: frontend
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+        app.kubernetes.io/part-of: deception-system
+        app.kubernetes.io/component: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: deception/frontend:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 3000
+              protocol: TCP
+          env:
+            - name: PRODUCT_SERVICE_URL
+              value: http://product-service.ecommerce-real.svc.cluster.local:8081
+            - name: CART_SERVICE_URL
+              value: http://cart-service.ecommerce-real.svc.cluster.local:8082
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+---
+# =============================================================================
+# Service — ClusterIP on port 3000
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: ecommerce-real
+  labels:
+    app: frontend
+    app.kubernetes.io/part-of: deception-system
+    app.kubernetes.io/component: frontend
+spec:
+  type: ClusterIP
+  selector:
+    app: frontend
+  ports:
+    - port: 3000
+      targetPort: 3000
+      protocol: TCP

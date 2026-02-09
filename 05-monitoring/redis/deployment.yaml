@@ -1,0 +1,177 @@
+# ============================================================================
+# Redis — ConfigMap, Deployment, Service
+# ============================================================================
+# Central nervous system of the deception platform. All components publish
+# events here via pub/sub, and the dashboard subscribes for real-time display.
+# Uses redis:7-alpine with persistence disabled (pure in-memory event bus).
+# Tuned for minimal resource usage on an i3 PC (4GB RAM).
+#
+# Pub/Sub Channels:
+#   attack_detected   — traffic analyzer publishes when it detects an attack
+#   decoy_spawned     — deception controller publishes when decoys are created
+#   decoy_interaction — decoy pods publish every attacker interaction here
+#   routing_update    — published when traffic routing rules change
+#   pod_status        — periodic pod status updates from event collector
+#
+# Accessible from all namespaces at:
+#   redis.monitoring.svc.cluster.local:6379
+# ============================================================================
+
+# ---------------------------------------------------------------------------
+# ConfigMap: redis.conf — tuned for low-memory pub/sub event bus
+# ---------------------------------------------------------------------------
+# Persistence is disabled entirely (no AOF, no RDB snapshots) because Redis
+# is used purely as a transient event bus. If the pod restarts, in-flight
+# events are lost — which is acceptable since this is real-time monitoring,
+# not durable storage. maxmemory is set to 48MB to stay well within the
+# 64Mi container limit (leaving headroom for Redis overhead and OS buffers).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-config
+  namespace: monitoring
+  labels:
+    app: redis
+    app.kubernetes.io/part-of: deception-system
+    app.kubernetes.io/component: redis
+data:
+  redis.conf: |
+    # --- Memory ---
+    # Cap at 48MB — leaves ~16MB headroom within the 64Mi container limit
+    # for Redis internal overhead, OS page tables, and connection buffers.
+    maxmemory 48mb
+
+    # Evict least-recently-used keys when memory is full.
+    # This ensures pub/sub metadata and client buffers are never blocked
+    # by stale keys if any component accidentally writes key-value data.
+    maxmemory-policy allkeys-lru
+
+    # --- Persistence (disabled) ---
+    # No RDB snapshots — saves disk I/O and memory (fork overhead)
+    save ""
+    # No AOF log — we don't need durability for transient events
+    appendonly no
+
+    # --- Networking ---
+    # Accept connections from all pod IPs (required for cross-namespace access)
+    bind 0.0.0.0
+    # Disable protected mode since we're behind NetworkPolicies
+    protected-mode no
+    # Standard port
+    port 6379
+
+    # --- Pub/Sub tuning ---
+    # Client output buffer limits for pub/sub subscribers.
+    # If a subscriber falls behind by 8MB (hard) or stays above 2MB for 60s
+    # (soft), disconnect it to prevent memory exhaustion.
+    # Format: client-output-buffer-limit <class> <hard> <soft> <soft-seconds>
+    client-output-buffer-limit pubsub 8mb 2mb 60
+
+    # --- Performance ---
+    # Reduce latency for pub/sub at the cost of slightly higher CPU
+    tcp-keepalive 60
+    # Timeout idle connections after 5 minutes to free resources
+    timeout 300
+    # Single-threaded is fine for our event volume
+    io-threads 1
+---
+
+# ---------------------------------------------------------------------------
+# Deployment: single-replica Redis
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: monitoring
+  labels:
+    app: redis
+    app.kubernetes.io/part-of: deception-system
+    app.kubernetes.io/component: redis
+spec:
+  replicas: 1
+  strategy:
+    # Recreate — only one Redis instance should exist at a time to avoid
+    # split-brain pub/sub. Rolling updates aren't needed for a single replica.
+    type: Recreate
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+        app.kubernetes.io/part-of: deception-system
+        app.kubernetes.io/component: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+              protocol: TCP
+          # Load custom config instead of Redis defaults
+          command: ["redis-server", "/etc/redis/redis.conf"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 48Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          # Readiness: redis-cli ping returns PONG when ready to accept commands
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # Liveness: same check but with longer intervals — restart if Redis
+          # becomes unresponsive (e.g., stuck in a memory-full state)
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: redis-config
+              mountPath: /etc/redis
+              readOnly: true
+      volumes:
+        - name: redis-config
+          configMap:
+            name: redis-config
+---
+
+# ---------------------------------------------------------------------------
+# Service: ClusterIP on port 6379
+# ---------------------------------------------------------------------------
+# Accessible from all namespaces via:
+#   redis.monitoring.svc.cluster.local:6379
+#
+# NetworkPolicies in 01-namespaces/network-policies.yaml control which
+# namespaces can reach this port:
+#   - decoy-pool:       allowed on port 6379 (event publishing)
+#   - ecommerce-real:   allowed on port 6379 (event publishing)
+#   - deception-gateway: allowed (unrestricted egress)
+#   - monitoring:        allowed (local namespace)
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: monitoring
+  labels:
+    app: redis
+    app.kubernetes.io/part-of: deception-system
+    app.kubernetes.io/component: redis
+spec:
+  type: ClusterIP
+  selector:
+    app: redis
+  ports:
+    - port: 6379
+      targetPort: 6379
+      protocol: TCP

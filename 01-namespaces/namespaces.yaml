@@ -1,0 +1,55 @@
+# ============================================================================
+# Deception System — Namespace Definitions
+# ============================================================================
+# Four isolated namespaces, each serving a distinct layer of the system.
+# Labels are used by NetworkPolicies and ResourceQuotas to target namespaces.
+# ============================================================================
+
+# --- ecommerce-real ---
+# The production e-commerce application: React frontend, Flask APIs, PostgreSQL.
+# This namespace contains REAL user data and must be protected from decoy traffic.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ecommerce-real
+  labels:
+    app.kubernetes.io/part-of: deception-system
+    layer: production
+---
+
+# --- deception-gateway ---
+# The security brain: traffic-router (NGINX), traffic-analyzer (attack detection),
+# and deception-controller (K8s operator that spawns decoys).
+# This namespace needs cross-namespace access to route traffic and manage pods.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: deception-gateway
+  labels:
+    app.kubernetes.io/part-of: deception-system
+    layer: security
+---
+
+# --- decoy-pool ---
+# Where honeypot pods are dynamically created by the deception-controller.
+# Pods here serve fake data and log attacker behavior. MUST be isolated from
+# ecommerce-real to prevent attackers from pivoting to real services.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: decoy-pool
+  labels:
+    app.kubernetes.io/part-of: deception-system
+    layer: deception
+---
+
+# --- monitoring ---
+# Observability layer: Redis (pub/sub bus), event-collector (WebSocket aggregator),
+# and the D3.js dashboard. All components publish events here via Redis.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    app.kubernetes.io/part-of: deception-system
+    layer: observability

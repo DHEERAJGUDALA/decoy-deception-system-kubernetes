@@ -1,0 +1,222 @@
+# ============================================================================
+# Deception System — Network Policies
+# ============================================================================
+# These policies enforce strict traffic isolation between namespaces.
+# The critical rule: decoy-pool must NEVER reach ecommerce-real, so
+# attackers trapped in decoys cannot pivot to real services.
+#
+# Summary:
+#   decoy-pool      → BLOCKED from ecommerce-real (egress deny)
+#   decoy-pool      → ALLOWED to monitoring Redis on 6379 (for logging)
+#   decoy-pool      → ALLOWED to kube-system DNS on 53 (service discovery)
+#   ecommerce-real  → BLOCKED from decoy-pool (egress deny)
+#   ecommerce-real  → ALLOWED to monitoring Redis on 6379
+#   deception-gw    → ALLOWED to all namespaces (needs to route + manage)
+#   monitoring      → ALLOWED to all namespaces (read-only observation)
+#   all namespaces  → ALLOWED to monitoring Redis on 6379 (event publishing)
+# ============================================================================
+
+# ---------------------------------------------------------------------------
+# POLICY 1: Decoy-pool isolation — deny egress to ecommerce-real
+# ---------------------------------------------------------------------------
+# This is the most critical policy. Attackers interacting with decoy pods
+# must not be able to reach the real e-commerce services under any
+# circumstances. We allow only: DNS (kube-system:53) and Redis
+# (monitoring:6379) for event logging.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: decoy-pool-egress-deny-real
+  namespace: decoy-pool
+  labels:
+    app.kubernetes.io/part-of: deception-system
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    # Allow DNS resolution (required for any service discovery)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow publishing events to Redis in the monitoring namespace
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              layer: observability
+      ports:
+        - protocol: TCP
+          port: 6379
+    # Allow traffic within decoy-pool (pod-to-pod if needed)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              layer: deception
+---
+
+# ---------------------------------------------------------------------------
+# POLICY 2: Decoy-pool ingress — only accept traffic from deception-gateway
+# ---------------------------------------------------------------------------
+# Decoy pods should only receive traffic from the traffic-router in the
+# deception-gateway namespace. No direct access from other sources.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: decoy-pool-ingress-from-gateway
+  namespace: decoy-pool
+  labels:
+    app.kubernetes.io/part-of: deception-system
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Only the deception-gateway (traffic-router) can send traffic to decoys
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              layer: security
+    # Allow monitoring to scrape/observe decoy pods
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              layer: observability
+---
+
+# ---------------------------------------------------------------------------
+# POLICY 3: Ecommerce-real — deny egress to decoy-pool
+# ---------------------------------------------------------------------------
+# Prevent any accidental or malicious routing from real services to decoys.
+# Real services should never communicate with the honeypot layer.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ecommerce-real-deny-decoy-egress
+  namespace: ecommerce-real
+  labels:
+    app.kubernetes.io/part-of: deception-system
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    # Allow DNS resolution
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow internal communication within ecommerce-real
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              layer: production
+    # Allow publishing events to monitoring Redis
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              layer: observability
+      ports:
+        - protocol: TCP
+          port: 6379
+    # Allow deception-gateway to reach us (for traffic routing)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              layer: security
+    # EXPLICITLY NOT LISTED: decoy-pool (layer: deception) — blocked by default
+---
+
+# ---------------------------------------------------------------------------
+# POLICY 4: Deception-gateway — allow egress to all namespaces
+# ---------------------------------------------------------------------------
+# The gateway is the "brain" that routes traffic, analyzes requests, and
+# manages decoy lifecycle. It needs unrestricted egress to:
+#   - ecommerce-real (forward legitimate traffic)
+#   - decoy-pool (forward attacker traffic, manage pods)
+#   - monitoring (publish events to Redis)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deception-gateway-allow-all-egress
+  namespace: deception-gateway
+  labels:
+    app.kubernetes.io/part-of: deception-system
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    # Allow all egress — gateway needs to reach every namespace
+    - {}
+---
+
+# ---------------------------------------------------------------------------
+# POLICY 5: Deception-gateway ingress — accept from all (it's the entry point)
+# ---------------------------------------------------------------------------
+# The traffic-router is the single external entry point. It must accept
+# traffic from outside the cluster (NodePort) and from all internal sources.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deception-gateway-allow-all-ingress
+  namespace: deception-gateway
+  labels:
+    app.kubernetes.io/part-of: deception-system
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - {}
+---
+
+# ---------------------------------------------------------------------------
+# POLICY 6: Monitoring — allow egress to all namespaces (observation)
+# ---------------------------------------------------------------------------
+# The event-collector needs to observe pods across all namespaces via the
+# Kubernetes API. Redis needs to accept connections from all publishers.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: monitoring-allow-all-egress
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: deception-system
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - {}
+---
+
+# ---------------------------------------------------------------------------
+# POLICY 7: Monitoring ingress — accept from all namespaces on Redis port
+# ---------------------------------------------------------------------------
+# All namespaces publish events to Redis (port 6379). The dashboard is also
+# accessed via NodePort. Accept all ingress.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: monitoring-allow-all-ingress
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: deception-system
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Accept from all namespaces — Redis is the central event bus
+    - {}

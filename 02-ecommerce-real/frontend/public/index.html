@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TechMart &mdash; Online Store</title>
+  <style>
+    /* ================================================================
+       Reset & base
+       ================================================================ */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+                   Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: #f5f5f7;
+      color: #1d1d1f;
+      line-height: 1.5;
+    }
+
+    /* ================================================================
+       Header
+       ================================================================ */
+    .header {
+      background: #1d1d1f;
+      color: #fff;
+      padding: 0 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 56px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .header__brand {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+    }
+
+    .header__brand span { color: #0071e3; }
+
+    .header__cart-btn {
+      background: none;
+      border: 1px solid rgba(255,255,255,.25);
+      color: #fff;
+      padding: 8px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: background .2s;
+    }
+
+    .header__cart-btn:hover { background: rgba(255,255,255,.1); }
+
+    .header__cart-count {
+      background: #0071e3;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* ================================================================
+       Category filter bar
+       ================================================================ */
+    .filters {
+      display: flex;
+      gap: 8px;
+      padding: 16px 24px;
+      background: #fff;
+      border-bottom: 1px solid #e5e5e7;
+      flex-wrap: wrap;
+    }
+
+    .filters__btn {
+      padding: 6px 16px;
+      border-radius: 20px;
+      border: 1px solid #d2d2d7;
+      background: #fff;
+      color: #1d1d1f;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all .2s;
+    }
+
+    .filters__btn:hover { border-color: #0071e3; color: #0071e3; }
+    .filters__btn--active {
+      background: #0071e3;
+      color: #fff;
+      border-color: #0071e3;
+    }
+
+    /* ================================================================
+       Product grid
+       ================================================================ */
+    .main { padding: 24px; max-width: 1200px; margin: 0 auto; }
+
+    .products {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 20px;
+    }
+
+    .product-card {
+      background: #fff;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 1px 3px rgba(0,0,0,.08);
+      transition: transform .2s, box-shadow .2s;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .product-card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 6px 20px rgba(0,0,0,.1);
+    }
+
+    .product-card__image {
+      height: 180px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 64px;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .product-card__body { padding: 16px; flex: 1; display: flex; flex-direction: column; }
+
+    .product-card__category {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .8px;
+      color: #86868b;
+      margin-bottom: 4px;
+    }
+
+    .product-card__name {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 6px;
+      color: #1d1d1f;
+    }
+
+    .product-card__desc {
+      font-size: 13px;
+      color: #6e6e73;
+      margin-bottom: 12px;
+      flex: 1;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .product-card__footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .product-card__price {
+      font-size: 18px;
+      font-weight: 700;
+      color: #1d1d1f;
+    }
+
+    .product-card__stock {
+      font-size: 11px;
+      color: #86868b;
+    }
+
+    .product-card__stock--low { color: #ff3b30; }
+
+    .btn-add {
+      margin-top: 12px;
+      width: 100%;
+      padding: 10px;
+      border: none;
+      border-radius: 8px;
+      background: #0071e3;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .2s;
+    }
+
+    .btn-add:hover { background: #0077ed; }
+    .btn-add:active { background: #005bb5; }
+    .btn-add:disabled { background: #d2d2d7; cursor: not-allowed; }
+
+    /* ================================================================
+       Cart sidebar overlay
+       ================================================================ */
+    .cart-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.4);
+      z-index: 200;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .3s;
+    }
+
+    .cart-overlay--open { opacity: 1; pointer-events: auto; }
+
+    .cart-sidebar {
+      position: fixed;
+      top: 0;
+      right: 0;
+      width: 380px;
+      max-width: 90vw;
+      height: 100%;
+      background: #fff;
+      z-index: 201;
+      transform: translateX(100%);
+      transition: transform .3s ease;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .cart-sidebar--open { transform: translateX(0); }
+
+    .cart-sidebar__header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      border-bottom: 1px solid #e5e5e7;
+    }
+
+    .cart-sidebar__header h2 { font-size: 18px; font-weight: 700; }
+
+    .cart-sidebar__close {
+      background: none;
+      border: none;
+      font-size: 24px;
+      cursor: pointer;
+      color: #86868b;
+      padding: 4px;
+    }
+
+    .cart-sidebar__items {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 20px;
+    }
+
+    .cart-sidebar__empty {
+      text-align: center;
+      color: #86868b;
+      padding: 40px 0;
+      font-size: 14px;
+    }
+
+    .cart-item {
+      display: flex;
+      gap: 12px;
+      padding: 12px 0;
+      border-bottom: 1px solid #f0f0f0;
+    }
+
+    .cart-item__thumb {
+      width: 48px;
+      height: 48px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      font-weight: 700;
+      color: #fff;
+      flex-shrink: 0;
+    }
+
+    .cart-item__info { flex: 1; min-width: 0; }
+
+    .cart-item__name {
+      font-size: 14px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .cart-item__meta {
+      font-size: 12px;
+      color: #86868b;
+    }
+
+    .cart-item__remove {
+      background: none;
+      border: none;
+      color: #ff3b30;
+      font-size: 12px;
+      cursor: pointer;
+      padding: 2px 0;
+    }
+
+    .cart-item__remove:hover { text-decoration: underline; }
+
+    .cart-sidebar__footer {
+      padding: 16px 20px;
+      border-top: 1px solid #e5e5e7;
+    }
+
+    .cart-sidebar__total {
+      display: flex;
+      justify-content: space-between;
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+
+    .btn-checkout {
+      width: 100%;
+      padding: 12px;
+      border: none;
+      border-radius: 10px;
+      background: #30d158;
+      color: #fff;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background .2s;
+    }
+
+    .btn-checkout:hover { background: #28b84c; }
+    .btn-checkout:disabled { background: #d2d2d7; cursor: not-allowed; }
+
+    /* ================================================================
+       Notification toast
+       ================================================================ */
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(80px);
+      background: #1d1d1f;
+      color: #fff;
+      padding: 12px 24px;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 500;
+      z-index: 300;
+      transition: transform .3s ease;
+      pointer-events: none;
+    }
+
+    .toast--visible { transform: translateX(-50%) translateY(0); }
+    .toast--error { background: #ff3b30; }
+    .toast--success { background: #30d158; }
+
+    /* ================================================================
+       Loading state
+       ================================================================ */
+    .loading {
+      text-align: center;
+      padding: 60px 0;
+      color: #86868b;
+      font-size: 14px;
+    }
+
+    .spinner {
+      width: 32px;
+      height: 32px;
+      border: 3px solid #e5e5e7;
+      border-top-color: #0071e3;
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+      margin: 0 auto 12px;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ================================================================
+       Order confirmation modal
+       ================================================================ */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.5);
+      z-index: 300;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .3s;
+    }
+
+    .modal-overlay--open { opacity: 1; pointer-events: auto; }
+
+    .modal {
+      background: #fff;
+      border-radius: 16px;
+      padding: 32px;
+      max-width: 400px;
+      width: 90%;
+      text-align: center;
+    }
+
+    .modal__icon {
+      font-size: 48px;
+      margin-bottom: 12px;
+    }
+
+    .modal__title {
+      font-size: 20px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .modal__text {
+      font-size: 14px;
+      color: #6e6e73;
+      margin-bottom: 20px;
+    }
+
+    .modal__btn {
+      padding: 10px 32px;
+      border: none;
+      border-radius: 8px;
+      background: #0071e3;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    /* ================================================================
+       Responsive
+       ================================================================ */
+    @media (max-width: 640px) {
+      .products {
+        grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+        gap: 12px;
+      }
+      .product-card__image { height: 120px; font-size: 40px; }
+      .product-card__body { padding: 12px; }
+      .product-card__name { font-size: 14px; }
+      .product-card__price { font-size: 16px; }
+      .main { padding: 12px; }
+      .header { padding: 0 12px; }
+      .filters { padding: 12px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ============================================================
+       Header
+       ============================================================ -->
+  <header class="header">
+    <div class="header__brand">TechMart <span>&mdash;</span> Online Store</div>
+    <button class="header__cart-btn" id="cartToggle">
+      Cart <span class="header__cart-count" id="cartCount">0</span>
+    </button>
+  </header>
+
+  <!-- ============================================================
+       Category filters
+       ============================================================ -->
+  <div class="filters" id="filters">
+    <button class="filters__btn filters__btn--active" data-category="all">All</button>
+    <button class="filters__btn" data-category="electronics">Electronics</button>
+    <button class="filters__btn" data-category="clothing">Clothing</button>
+    <button class="filters__btn" data-category="books">Books</button>
+  </div>
+
+  <!-- ============================================================
+       Product grid
+       ============================================================ -->
+  <main class="main">
+    <div class="products" id="productGrid">
+      <div class="loading">
+        <div class="spinner"></div>
+        Loading products&hellip;
+      </div>
+    </div>
+  </main>
+
+  <!-- ============================================================
+       Cart sidebar
+       ============================================================ -->
+  <div class="cart-overlay" id="cartOverlay"></div>
+  <aside class="cart-sidebar" id="cartSidebar">
+    <div class="cart-sidebar__header">
+      <h2>Your Cart</h2>
+      <button class="cart-sidebar__close" id="cartClose">&times;</button>
+    </div>
+    <div class="cart-sidebar__items" id="cartItems">
+      <div class="cart-sidebar__empty">Your cart is empty</div>
+    </div>
+    <div class="cart-sidebar__footer">
+      <div class="cart-sidebar__total">
+        <span>Total</span>
+        <span id="cartTotal">$0.00</span>
+      </div>
+      <button class="btn-checkout" id="checkoutBtn" disabled>Checkout</button>
+    </div>
+  </aside>
+
+  <!-- ============================================================
+       Order confirmation modal
+       ============================================================ -->
+  <div class="modal-overlay" id="modalOverlay">
+    <div class="modal">
+      <div class="modal__icon">&#10003;</div>
+      <div class="modal__title">Order Confirmed!</div>
+      <div class="modal__text" id="modalText"></div>
+      <button class="modal__btn" id="modalClose">Continue Shopping</button>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       Toast notification
+       ============================================================ -->
+  <div class="toast" id="toast"></div>
+
+  <!-- ============================================================
+       Application JavaScript
+       ============================================================ -->
+  <script>
+    (function () {
+      'use strict';
+
+      // -----------------------------------------------------------
+      // Session management
+      // -----------------------------------------------------------
+      function getSessionId() {
+        let sid = localStorage.getItem('session_id');
+        if (!sid) {
+          sid = 'sess-' + crypto.randomUUID();
+          localStorage.setItem('session_id', sid);
+        }
+        return sid;
+      }
+      const SESSION_ID = getSessionId();
+
+      // -----------------------------------------------------------
+      // State
+      // -----------------------------------------------------------
+      let allProducts = [];
+      let cartItems = [];
+      let activeCategory = 'all';
+
+      // -----------------------------------------------------------
+      // DOM refs
+      // -----------------------------------------------------------
+      const $grid = document.getElementById('productGrid');
+      const $cartToggle = document.getElementById('cartToggle');
+      const $cartCount = document.getElementById('cartCount');
+      const $cartOverlay = document.getElementById('cartOverlay');
+      const $cartSidebar = document.getElementById('cartSidebar');
+      const $cartClose = document.getElementById('cartClose');
+      const $cartItems = document.getElementById('cartItems');
+      const $cartTotal = document.getElementById('cartTotal');
+      const $checkoutBtn = document.getElementById('checkoutBtn');
+      const $filters = document.getElementById('filters');
+      const $toast = document.getElementById('toast');
+      const $modalOverlay = document.getElementById('modalOverlay');
+      const $modalText = document.getElementById('modalText');
+      const $modalClose = document.getElementById('modalClose');
+
+      // -----------------------------------------------------------
+      // Color palette for product placeholder images
+      // -----------------------------------------------------------
+      const CATEGORY_COLORS = {
+        electronics: ['#0071e3', '#147ce5', '#2997ff'],
+        clothing: ['#bf4800', '#c75300', '#e8590c'],
+        books: ['#1d7d4f', '#248a5a', '#34c759'],
+      };
+
+      function getColor(category, index) {
+        const palette = CATEGORY_COLORS[category] || ['#86868b'];
+        return palette[index % palette.length];
+      }
+
+      // -----------------------------------------------------------
+      // Toast notifications
+      // -----------------------------------------------------------
+      let toastTimer = null;
+      function showToast(message, type) {
+        clearTimeout(toastTimer);
+        $toast.textContent = message;
+        $toast.className = 'toast toast--visible';
+        if (type === 'error') $toast.classList.add('toast--error');
+        if (type === 'success') $toast.classList.add('toast--success');
+        toastTimer = setTimeout(() => {
+          $toast.classList.remove('toast--visible');
+        }, 2500);
+      }
+
+      // -----------------------------------------------------------
+      // Cart sidebar toggle
+      // -----------------------------------------------------------
+      function openCart() {
+        $cartOverlay.classList.add('cart-overlay--open');
+        $cartSidebar.classList.add('cart-sidebar--open');
+      }
+
+      function closeCart() {
+        $cartOverlay.classList.remove('cart-overlay--open');
+        $cartSidebar.classList.remove('cart-sidebar--open');
+      }
+
+      $cartToggle.addEventListener('click', openCart);
+      $cartClose.addEventListener('click', closeCart);
+      $cartOverlay.addEventListener('click', closeCart);
+
+      // -----------------------------------------------------------
+      // Category filter
+      // -----------------------------------------------------------
+      $filters.addEventListener('click', function (e) {
+        const btn = e.target.closest('.filters__btn');
+        if (!btn) return;
+        activeCategory = btn.dataset.category;
+        $filters.querySelectorAll('.filters__btn').forEach(function (b) {
+          b.classList.toggle('filters__btn--active', b === btn);
+        });
+        renderProducts();
+      });
+
+      // -----------------------------------------------------------
+      // Render products
+      // -----------------------------------------------------------
+      function renderProducts() {
+        const filtered = activeCategory === 'all'
+          ? allProducts
+          : allProducts.filter(function (p) { return p.category === activeCategory; });
+
+        if (filtered.length === 0) {
+          $grid.innerHTML = '<div class="loading">No products found</div>';
+          return;
+        }
+
+        $grid.innerHTML = filtered.map(function (p, i) {
+          var color = getColor(p.category, i);
+          var initial = p.name.charAt(0).toUpperCase();
+          var stockClass = p.stock_count < 10 ? 'product-card__stock--low' : '';
+          var stockText = p.stock_count < 10
+            ? 'Only ' + p.stock_count + ' left'
+            : p.stock_count + ' in stock';
+          var disabled = p.stock_count === 0 ? 'disabled' : '';
+
+          return (
+            '<div class="product-card">' +
+              '<div class="product-card__image" style="background:' + color + '">' +
+                initial +
+              '</div>' +
+              '<div class="product-card__body">' +
+                '<div class="product-card__category">' + escapeHtml(p.category) + '</div>' +
+                '<div class="product-card__name">' + escapeHtml(p.name) + '</div>' +
+                '<div class="product-card__desc">' + escapeHtml(p.description) + '</div>' +
+                '<div class="product-card__footer">' +
+                  '<span class="product-card__price">$' + p.price.toFixed(2) + '</span>' +
+                  '<span class="product-card__stock ' + stockClass + '">' + stockText + '</span>' +
+                '</div>' +
+                '<button class="btn-add" data-product-id="' + p.id + '" ' + disabled + '>' +
+                  (p.stock_count === 0 ? 'Out of Stock' : 'Add to Cart') +
+                '</button>' +
+              '</div>' +
+            '</div>'
+          );
+        }).join('');
+      }
+
+      // -----------------------------------------------------------
+      // Render cart sidebar
+      // -----------------------------------------------------------
+      function renderCart() {
+        var count = cartItems.reduce(function (s, item) { return s + item.quantity; }, 0);
+        $cartCount.textContent = count;
+
+        if (cartItems.length === 0) {
+          $cartItems.innerHTML = '<div class="cart-sidebar__empty">Your cart is empty</div>';
+          $cartTotal.textContent = '$0.00';
+          $checkoutBtn.disabled = true;
+          return;
+        }
+
+        var total = 0;
+        $cartItems.innerHTML = cartItems.map(function (item) {
+          var subtotal = item.price * item.quantity;
+          total += subtotal;
+          var color = getColor(item.category, item.product_id);
+          var initial = item.name.charAt(0).toUpperCase();
+
+          return (
+            '<div class="cart-item">' +
+              '<div class="cart-item__thumb" style="background:' + color + '">' + initial + '</div>' +
+              '<div class="cart-item__info">' +
+                '<div class="cart-item__name">' + escapeHtml(item.name) + '</div>' +
+                '<div class="cart-item__meta">' +
+                  'Qty: ' + item.quantity + ' &times; $' + item.price.toFixed(2) +
+                  ' = $' + subtotal.toFixed(2) +
+                '</div>' +
+                '<button class="cart-item__remove" data-cart-item-id="' + item.cart_item_id + '">Remove</button>' +
+              '</div>' +
+            '</div>'
+          );
+        }).join('');
+
+        $cartTotal.textContent = '$' + total.toFixed(2);
+        $checkoutBtn.disabled = false;
+      }
+
+      // -----------------------------------------------------------
+      // HTML escape
+      // -----------------------------------------------------------
+      function escapeHtml(str) {
+        var div = document.createElement('div');
+        div.appendChild(document.createTextNode(str || ''));
+        return div.innerHTML;
+      }
+
+      // -----------------------------------------------------------
+      // API calls
+      // -----------------------------------------------------------
+      function fetchProducts() {
+        return fetch('/api/products')
+          .then(function (res) {
+            if (!res.ok) throw new Error('Failed to load products');
+            return res.json();
+          })
+          .then(function (data) {
+            allProducts = data;
+            renderProducts();
+          })
+          .catch(function (err) {
+            $grid.innerHTML = '<div class="loading">Failed to load products. Please refresh.</div>';
+            showToast(err.message, 'error');
+          });
+      }
+
+      function fetchCart() {
+        return fetch('/api/cart/' + SESSION_ID)
+          .then(function (res) {
+            if (!res.ok) throw new Error('Failed to load cart');
+            return res.json();
+          })
+          .then(function (data) {
+            cartItems = data.items || [];
+            renderCart();
+          })
+          .catch(function (err) {
+            showToast(err.message, 'error');
+          });
+      }
+
+      function addToCart(productId) {
+        return fetch('/api/cart/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id: SESSION_ID,
+            product_id: productId,
+            quantity: 1,
+          }),
+        })
+          .then(function (res) {
+            if (!res.ok) return res.json().then(function (d) { throw new Error(d.error || 'Add failed'); });
+            return res.json();
+          })
+          .then(function (data) {
+            cartItems = data.items || [];
+            renderCart();
+            showToast('Added to cart', 'success');
+          })
+          .catch(function (err) {
+            showToast(err.message, 'error');
+          });
+      }
+
+      function removeFromCart(cartItemId) {
+        return fetch('/api/cart/' + SESSION_ID + '/' + cartItemId, {
+          method: 'DELETE',
+        })
+          .then(function (res) {
+            if (!res.ok) return res.json().then(function (d) { throw new Error(d.error || 'Remove failed'); });
+            return res.json();
+          })
+          .then(function () {
+            return fetchCart();
+          })
+          .catch(function (err) {
+            showToast(err.message, 'error');
+          });
+      }
+
+      function doCheckout() {
+        $checkoutBtn.disabled = true;
+        $checkoutBtn.textContent = 'Processing\u2026';
+
+        return fetch('/api/cart/' + SESSION_ID + '/checkout', {
+          method: 'POST',
+        })
+          .then(function (res) {
+            if (!res.ok) return res.json().then(function (d) { throw new Error(d.error || 'Checkout failed'); });
+            return res.json();
+          })
+          .then(function (order) {
+            cartItems = [];
+            renderCart();
+            closeCart();
+
+            $modalText.textContent =
+              'Order #' + order.order_id + ' placed successfully. ' +
+              order.items_count + ' item(s) for $' + order.total_price.toFixed(2) + '.';
+            $modalOverlay.classList.add('modal-overlay--open');
+
+            // Refresh products to update stock counts
+            fetchProducts();
+          })
+          .catch(function (err) {
+            showToast(err.message, 'error');
+          })
+          .finally(function () {
+            $checkoutBtn.disabled = cartItems.length === 0;
+            $checkoutBtn.textContent = 'Checkout';
+          });
+      }
+
+      // -----------------------------------------------------------
+      // Event delegation: Add to Cart buttons
+      // -----------------------------------------------------------
+      $grid.addEventListener('click', function (e) {
+        var btn = e.target.closest('.btn-add');
+        if (!btn || btn.disabled) return;
+        var productId = parseInt(btn.dataset.productId, 10);
+        btn.disabled = true;
+        btn.textContent = 'Adding\u2026';
+        addToCart(productId).finally(function () {
+          btn.disabled = false;
+          btn.textContent = 'Add to Cart';
+        });
+      });
+
+      // -----------------------------------------------------------
+      // Event delegation: Remove from Cart buttons
+      // -----------------------------------------------------------
+      $cartItems.addEventListener('click', function (e) {
+        var btn = e.target.closest('.cart-item__remove');
+        if (!btn) return;
+        var cartItemId = parseInt(btn.dataset.cartItemId, 10);
+        removeFromCart(cartItemId);
+      });
+
+      // -----------------------------------------------------------
+      // Checkout button
+      // -----------------------------------------------------------
+      $checkoutBtn.addEventListener('click', doCheckout);
+
+      // -----------------------------------------------------------
+      // Modal close
+      // -----------------------------------------------------------
+      $modalClose.addEventListener('click', function () {
+        $modalOverlay.classList.remove('modal-overlay--open');
+      });
+
+      // -----------------------------------------------------------
+      // Initial load
+      // -----------------------------------------------------------
+      fetchProducts();
+      fetchCart();
+
+    })();
+  </script>
+</body>
+</html>

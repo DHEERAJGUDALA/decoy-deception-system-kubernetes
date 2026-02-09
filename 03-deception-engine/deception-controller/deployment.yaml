@@ -1,0 +1,108 @@
+# =============================================================================
+# Deception Controller — Deployment + Service
+# =============================================================================
+# Kubernetes operator that dynamically spawns honeypot pod sets in response
+# to detected attacks. Subscribes to Redis "attack_detected" channel,
+# creates decoy pods/services in decoy-pool namespace, manages TTL-based
+# lifecycle cleanup, and publishes routing updates for the traffic-router.
+#
+# Runs with a SINGLE gunicorn worker because the controller manages
+# background threads (Redis subscriber + TTL cleanup) with shared in-memory
+# state. Multiple workers would duplicate these threads and double-process
+# attack events.
+#
+# Uses the deception-controller ServiceAccount (from rbac.yaml) which has
+# full pod/service CRUD in decoy-pool and cluster-wide pod read + event
+# create permissions.
+#
+# Listens on port 8086. Internal only — status/health endpoints for
+# monitoring and Kubernetes probes.
+# =============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deception-controller
+  namespace: deception-gateway
+  labels:
+    app: deception-controller
+    app.kubernetes.io/part-of: deception-system
+    app.kubernetes.io/component: deception-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: deception-controller
+  template:
+    metadata:
+      labels:
+        app: deception-controller
+        app.kubernetes.io/part-of: deception-system
+        app.kubernetes.io/component: deception-controller
+    spec:
+      serviceAccountName: deception-controller
+      containers:
+        - name: deception-controller
+          image: deception/deception-controller:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8086
+              protocol: TCP
+          env:
+            - name: REDIS_URL
+              value: redis://redis.monitoring.svc.cluster.local:6379
+            - name: DECOY_NAMESPACE
+              value: decoy-pool
+            - name: PORT
+              value: "8086"
+          resources:
+            requests:
+              cpu: 75m
+              memory: 64Mi
+            limits:
+              cpu: 150m
+              memory: 192Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8086
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8086
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+---
+# =============================================================================
+# Service — ClusterIP on port 8086
+# =============================================================================
+# Accessible within the cluster at:
+#   deception-controller.deception-gateway.svc.cluster.local:8086
+#
+# Primary consumers:
+#   - Monitoring dashboard (GET /status for active decoy sets)
+#   - Kubernetes probes (GET /health)
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: deception-controller
+  namespace: deception-gateway
+  labels:
+    app: deception-controller
+    app.kubernetes.io/part-of: deception-system
+    app.kubernetes.io/component: deception-controller
+spec:
+  type: ClusterIP
+  selector:
+    app: deception-controller
+  ports:
+    - port: 8086
+      targetPort: 8086
+      protocol: TCP

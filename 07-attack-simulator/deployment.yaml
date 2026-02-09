@@ -1,0 +1,36 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: attack-simulator
+  namespace: default
+  labels:
+    app: attack-simulator
+    app.kubernetes.io/part-of: deception-system
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app: attack-simulator
+        app.kubernetes.io/part-of: deception-system
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: simulator
+          image: deception/attack-simulator:latest
+          imagePullPolicy: Never
+          args:
+            - "--target"
+            - "http://traffic-router.deception-gateway.svc.cluster.local"
+            - "--attack-type"
+            - "all"
+            - "--delay"
+            - "10"
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi

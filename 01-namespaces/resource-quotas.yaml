@@ -1,0 +1,100 @@
+# ============================================================================
+# Deception System — Resource Quotas
+# ============================================================================
+# Enforces hard limits on resource consumption per namespace to keep the
+# system within the 3GB RAM budget on an i3 PC with 4GB total.
+#
+# Budget breakdown:
+#   K3s control plane    : ~300 MB  (not quota-controlled)
+#   NGINX ingress        : ~128 MB  (not quota-controlled)
+#   ecommerce-real       :  768 MB  (6 pods max — frontend, 2 APIs, postgres, headroom)
+#   decoy-pool           : 1024 MB  (12 pods max — up to 4 attack events x 3 decoys)
+#   monitoring           :  512 MB  (4 pods max — Redis, event-collector, dashboard, headroom)
+#   deception-gateway    :  no quota (critical path, 3 pods, limits set per-pod)
+#   ─────────────────────────────────────
+#   Total controlled     : ~2304 MB
+#   Total with infra     : ~2732 MB — leaves headroom under 3GB
+#
+# Note: deception-gateway is intentionally not quota-limited because the
+# traffic-router and analyzer are on the critical path. Per-pod resource
+# limits in their Deployment specs provide sufficient protection.
+# ============================================================================
+
+# ───────────────────────────────────────────────────────────────────────────
+# DECOY-POOL — Largest quota to accommodate burst of decoy pods
+# ───────────────────────────────────────────────────────────────────────────
+# Max 15 pods allows up to 5 simultaneous attack events (3 decoys each).
+# The extra headroom (vs 12) prevents quota-rejected pod creation when
+# the controller evicts an old set but K8s hasn't fully terminated those
+# pods yet (async deletion race condition).
+# CPU budget: 15 pods x ~80m avg = ~1200m, capped at 1500m.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: decoy-pool-quota
+  namespace: decoy-pool
+  labels:
+    app.kubernetes.io/part-of: deception-system
+spec:
+  hard:
+    # Maximum number of pods — prevents runaway decoy creation
+    pods: "15"
+    # Total memory limit across all pods in this namespace
+    limits.memory: 1536Mi
+    # Total CPU limit across all pods in this namespace
+    limits.cpu: "1500m"
+    # Total memory requests (sum of all pod memory requests)
+    requests.memory: 960Mi
+    # Total CPU requests
+    requests.cpu: "750m"
+---
+
+# ───────────────────────────────────────────────────────────────────────────
+# ECOMMERCE-REAL — Production app with bounded resources
+# ───────────────────────────────────────────────────────────────────────────
+# 6 pods max: frontend, product-service, cart-service, postgres,
+# plus 2 extra for rolling updates or init containers.
+# PostgreSQL is the heaviest at 256Mi, others are 64-96Mi each.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: ecommerce-real-quota
+  namespace: ecommerce-real
+  labels:
+    app.kubernetes.io/part-of: deception-system
+spec:
+  hard:
+    # 4 running services + headroom for rolling updates
+    pods: "6"
+    # Total memory: postgres(256) + product(96) + cart(96) + frontend(64) + buffer
+    limits.memory: 768Mi
+    # Total CPU
+    limits.cpu: "1500m"
+    requests.memory: 384Mi
+    # Real stack baseline requests are 300m; set 500m to allow rollouts and one
+    # temporary test pod without tripping quota on single-node demo clusters.
+    requests.cpu: "500m"
+---
+
+# ───────────────────────────────────────────────────────────────────────────
+# MONITORING — Lightweight observability stack
+# ───────────────────────────────────────────────────────────────────────────
+# 4 pods max: Redis, event-collector, dashboard, plus one for updates.
+# Redis is capped at 64Mi, event-collector at 96Mi, dashboard at 64Mi.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: monitoring-quota
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: deception-system
+spec:
+  hard:
+    # Redis + event-collector + dashboard + headroom
+    pods: "4"
+    # Total memory: Redis(64) + collector(96) + dashboard(64) + buffer
+    limits.memory: 512Mi
+    # Total CPU
+    limits.cpu: "700m"
+    requests.memory: 192Mi
+    requests.cpu: "150m"
